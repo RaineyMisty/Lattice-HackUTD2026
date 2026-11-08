@@ -13,7 +13,7 @@ $env:NVIDIA_API_KEY = 'your NVIDIA key'
 npm.cmd run dev
 ```
 
-The dev server starts its own local SpacetimeDB instance on port 3382 and opens the page on an available port starting at 5173. The repository picker lists clean Git checkouts directly under `repo/`, with train-ticket selected by default when present. Each checkout starts in its own world. Restart the dev server after adding a checkout to the directory.
+The dev server starts its own local SpacetimeDB instance on port 3382 and opens the page on an available port starting at 5173. The repository picker automatically discovers Git checkouts directly under `repo/` while the dev server is running. Each checkout starts in its own world, and Start becomes available when the working tree matches the selected commit. Train-ticket is selected by default when it is ready.
 
 **Start** creates a simulation for the selected repository and starts its four Explorers. Verified findings grow the map and appear in the Agent speech bubbles. Use the bug icon to inject a fault, or pick up the wrench and click the red fault origin to remove its impact and cancel its pending events. Already executed behavior state stays in the simulation history. **Reset** stops the selected simulation and its active exploration, keeping discoveries in the database.
 

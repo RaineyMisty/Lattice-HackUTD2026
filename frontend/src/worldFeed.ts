@@ -67,7 +67,7 @@ export function useWorldFeed() {
           const world = available.find(row => row.id === worldId);
           if (!world) {
             setSnapshot(null);
-            if (!worldId && available.length) {
+            if (!worldId) {
               setError('');
               return;
             }

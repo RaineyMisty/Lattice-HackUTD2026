@@ -35,11 +35,16 @@ async function git(root: string, args: string[], maxBuffer = 16 * 1024 * 1024, s
   return stdout;
 }
 
-export async function repositoryRevision(root: string) {
+export async function repositoryHead(root: string) {
   const top = (await git(root, ['rev-parse', '--show-toplevel'])).toString('utf8').trim();
   if (await realpath(top) !== root) throw new Error('Pass the root of the Git repository for a live world');
   const commit = (await git(root, ['rev-parse', '--verify', 'HEAD^{commit}'])).toString('ascii').trim();
   if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(commit)) throw new Error('Expected a Git commit SHA');
+  return commit;
+}
+
+export async function repositoryRevision(root: string) {
+  const commit = await repositoryHead(root);
   const changes = await git(root, ['status', '--porcelain', '--untracked-files=no']);
   if (changes.length) throw new Error('The tracked working tree must match the Git commit before exploring');
   const tracked = (await git(root, ['ls-tree', '-r', '--name-only', '-z', commit])).toString('utf8').split('\0');

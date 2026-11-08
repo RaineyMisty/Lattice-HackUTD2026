@@ -1,16 +1,16 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdir, readdir, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, stat, writeFile } from 'node:fs/promises';
 import { connect } from 'node:net';
 import { basename, join, resolve } from 'node:path';
 import { setTimeout as pause } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { createServer, type ViteDevServer } from 'vite';
 import { AgentManager, CodexHarness, printAgentActivity, SpacetimeExplorationDatabase, type CodingHarness, type ExplorationHandle } from '../agents/src/index.ts';
-import { repositoryRevision, repositoryRoot } from '../agents/src/explorer/repository.ts';
+import { repositoryHead, repositoryRevision, repositoryRoot } from '../agents/src/explorer/repository.ts';
 import { serviceEntryPaths } from '../agents/src/explorer/entrypoint.ts';
 import { tables, type DbConnection, type Simulation } from '../spacetime_db/client/index.ts';
-import { connectDatabase, grantOperator, publisherToken, spacetimeCli } from './local-world.ts';
+import { connectDatabase, publisherToken, spacetimeCli } from './local-world.ts';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const log = (message: string) => printAgentActivity({ at: new Date().toISOString(), agentId: 'demo', kind: 'lifecycle', message });
@@ -30,27 +30,18 @@ interface DemoRepository {
   path: string;
   name: string;
   commit: string;
+  role?: 'reader' | 'operator';
   serviceEntries?: ReadonlyMap<string, string>;
   simulationId?: string;
   run?: ExplorationHandle;
 }
 
-async function localRepositories(directory: string) {
-  const repositories = new Map<string, DemoRepository>();
-  const folders = (await readdir(directory, { withFileTypes: true })).filter(entry => entry.isDirectory())
-    .sort((a, b) => a.name.localeCompare(b.name));
-  for (const folder of folders) {
-    try {
-      const path = await repositoryRoot(join(directory, folder.name));
-      const { commit, tracked } = await repositoryRevision(path);
-      const serviceEntries = serviceEntryPaths(tracked);
-      const worldId = `repo-${randomUUID()}`;
-      repositories.set(worldId, { worldId, path, name: basename(path), commit, serviceEntries: serviceEntries.size ? serviceEntries : undefined });
-    } catch (error) {
-      log(`Skipping ${folder.name} — ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
-  return repositories;
+async function repositoryFolders(directory: string) {
+  const entries = await readdir(directory, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === 'ENOENT') return [];
+    throw error;
+  });
+  return entries.filter(entry => entry.isDirectory()).sort((a, b) => a.name.localeCompare(b.name));
 }
 
 function port(value: number, name: string) {
@@ -97,10 +88,9 @@ export async function startDemo(options: DemoOptions = {}) {
     throw new Error(`Demo ports ${webPort} (web) and ${dbPort} (database) must be free`);
   }
   const dataDirectory = resolve(options.dataDirectory ?? join(root, '.data', 'interactive-demo'));
-  const repositories = await localRepositories(resolve(options.repositoryDirectory ?? join(root, 'repo')));
-  const initial = [...repositories.values()].find(repository => repository.name === 'train-ticket') ?? repositories.values().next().value;
-  if (!initial) throw new Error('Add a clean Git checkout to the repo directory');
-  const { worldId } = initial;
+  const repositoryDirectory = resolve(options.repositoryDirectory ?? join(root, 'repo'));
+  const repositories = new Map<string, DemoRepository>();
+  const folders = new Map<string, DemoRepository>();
   const { command, args } = spacetimeCli();
   const token = publisherToken();
   const uri = `http://127.0.0.1:${dbPort}`;
@@ -112,14 +102,18 @@ export async function startDemo(options: DemoOptions = {}) {
   let owner: DbConnection | undefined;
   let vite: ViteDevServer | undefined;
   let pending = Promise.resolve();
+  let discovery: Promise<void> | undefined;
+  let discoveryTimer: ReturnType<typeof setInterval> | undefined;
   let closed = false;
   let closing: Promise<void> | undefined;
 
   function close() {
     if (closing) return closing;
     closed = true;
+    clearInterval(discoveryTimer);
     closing = (async () => {
       try {
+        await discovery;
         await pending;
         await Promise.all([...repositories.values()].map(repository => repository.run?.stop()));
       } finally {
@@ -135,7 +129,7 @@ export async function startDemo(options: DemoOptions = {}) {
   }
 
   try {
-    log(`Preparing ${repositories.size} Git repositories and local SpacetimeDB on port ${dbPort}`);
+    log(`Preparing local SpacetimeDB on port ${dbPort}`);
     await mkdir(dataDirectory, { recursive: true });
     server = spawn(command, [...args, 'start', '--non-interactive', '--listen-addr', `127.0.0.1:${dbPort}`,
       '--data-dir', join(dataDirectory, 'data'), '--jwt-pub-key-path', join(dataDirectory, 'jwt.pub.pem'),
@@ -157,12 +151,44 @@ export async function startDemo(options: DemoOptions = {}) {
 
     const { client } = await connectDatabase({ ...config, token });
     owner = client;
-    for (const repository of repositories.values()) {
-      await owner.reducers.createWorld({ id: repository.worldId, repository: repository.name, commit: repository.commit });
-    }
-    const operatorToken = await grantOperator(owner, config, [...repositories.keys()]);
+    const { client: operator, token: operatorToken } = await connectDatabase(config);
+    const identity = operator.identity!;
+    operator.disconnect();
 
-    const simulations = [...repositories.keys()].map(id => tables.worldSimulations.where(row => row.worldId.eq(id)));
+    async function scanRepositories() {
+      for (const folder of await repositoryFolders(repositoryDirectory)) {
+        if (closed) return;
+        let repository = folders.get(folder.name);
+        if (repository?.role === 'operator') continue;
+        if (!repository) {
+          const candidate = join(repositoryDirectory, folder.name);
+          if (!await stat(join(candidate, '.git')).catch(() => null)) continue;
+          const path = await repositoryRoot(candidate).catch(() => null);
+          if (!path) continue;
+          const commit = await repositoryHead(path).catch(() => null);
+          if (!commit) continue; // A clone may still be fetching its first commit.
+          const worldId = `repo-${randomUUID()}`;
+          repository = { worldId, path, name: basename(path), commit };
+          await client.reducers.createWorld({ id: worldId, repository: repository.name, commit });
+          folders.set(folder.name, repository);
+          repositories.set(worldId, repository);
+        }
+        const revision = await repositoryRevision(repository.path).catch(() => null);
+        const ready = revision?.commit === repository.commit;
+        const role = ready ? 'operator' : 'reader';
+        if (role === repository.role) continue;
+        const serviceEntries = ready ? serviceEntryPaths(revision.tracked) : undefined;
+        repository.serviceEntries = serviceEntries?.size ? serviceEntries : undefined;
+        await client.reducers.setMember({ worldId: repository.worldId, identity, role });
+        repository.role = role;
+        log(`Repository ${repository.name} ${ready ? 'ready' : 'listed; waiting for a clean checkout'} (${repository.commit.slice(0, 7)})`);
+      }
+    }
+
+    await scanRepositories();
+    const ready = [...repositories.values()].filter(repository => repository.role === 'operator');
+    const worldId = (ready.find(repository => repository.name === 'train-ticket') ?? ready[0]
+      ?? repositories.values().next().value)?.worldId;
     const start = (row: Simulation) => {
       const repository = repositories.get(row.worldId);
       if (closed || !repository || repository.simulationId || !modelReady || row.label !== label || row.status !== 'running') return;
@@ -199,17 +225,17 @@ export async function startDemo(options: DemoOptions = {}) {
       client.subscriptionBuilder()
         .onApplied(() => { clearTimeout(timer); resolve(); })
         .onError(() => { clearTimeout(timer); reject(new Error('Could not subscribe to demo controls')); })
-        .subscribe(simulations);
+        .subscribe(tables.worldSimulations);
     });
 
-    const browserPath = `/?world=${encodeURIComponent(worldId)}#operator=${encodeURIComponent(operatorToken)}`;
+    const browserPath = `/${worldId ? `?world=${encodeURIComponent(worldId)}` : ''}#operator=${encodeURIComponent(operatorToken)}`;
     vite = await createServer({
       root: join(root, 'frontend'),
       configFile: join(root, 'frontend', 'vite.config.ts'),
       define: {
         'import.meta.env.VITE_LATTICE_DB_URL': JSON.stringify(uri),
         'import.meta.env.VITE_LATTICE_DATABASE': JSON.stringify(database),
-        'import.meta.env.VITE_LATTICE_WORLD_ID': JSON.stringify(worldId),
+        'import.meta.env.VITE_LATTICE_WORLD_ID': JSON.stringify(worldId ?? ''),
         'import.meta.env.VITE_LATTICE_DEMO_MODEL_READY': JSON.stringify(modelReady),
         'import.meta.env.VITE_LATTICE_DEMO_LABEL': JSON.stringify(label),
       },
@@ -224,7 +250,13 @@ export async function startDemo(options: DemoOptions = {}) {
     vite.printUrls();
     log(modelReady ? 'Waiting for the browser Start button; model requests have not started'
       : 'Waiting for the browser Start button; set NVIDIA_API_KEY and restart to enable exploration');
-    return { worldId, browserUrl, config, close, getRun: (id = worldId) => repositories.get(id)?.run };
+    discoveryTimer = setInterval(() => {
+      if (discovery) return;
+      discovery = scanRepositories()
+        .catch(error => log(`Could not refresh repositories — ${error instanceof Error ? error.message : String(error)}`))
+        .finally(() => { discovery = undefined; });
+    }, 2000).unref();
+    return { worldId, browserUrl, config, close, getRun: (id = worldId) => id ? repositories.get(id)?.run : undefined };
   } catch (error) {
     await close();
     throw error;
