@@ -14,7 +14,7 @@ export type EvidencePayload =
   | { kind: 'ownership'; owners: Ownership[] };
 export interface Evidence { id: string; agentId: AgentId; sourceId: string; submittedAt: string; payload: EvidencePayload; }
 export interface Incident { id: string; title: string; severity: string; injectedAt: string; }
-export interface Asset { id: string; name: string; subtitle: string; status: RiskStatus; reason: string; evidenceIds: string[]; version?: string; department?: string; owner?: string; businessCriticality?: Ownership['businessCriticality']; priority?: Priority; impactPath: string[]; }
+export interface Asset { id: string; name: string; subtitle: string; status: RiskStatus; health?: 'attack' | 'error'; reason: string; evidenceIds: string[]; version?: string; department?: string; owner?: string; businessCriticality?: Ownership['businessCriticality']; priority?: Priority; impactPath: string[]; }
 export interface IncidentTask { id: string; incidentId: string; assetId: string; assetName: string; department: string; owner: string; priority: Priority; title: string; instruction: string; reason: string; evidenceIds: string[]; createdAt: string; }
 export interface DepartmentNotification { id: string; taskId: string; department: string; createdAt: string; message: string; }
 export interface AgentState { id: AgentId; name: string; role: string; sourceKind: SourceKind; status: 'idle' | 'reading' | 'extracting' | 'submitted' | 'stopped' | 'error'; message: string; evidenceCount: number; updatedAt?: string; }
