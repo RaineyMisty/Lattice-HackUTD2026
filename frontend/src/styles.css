@@ -74,6 +74,26 @@ button:disabled { cursor: default; }
 }
 .controls button:hover:enabled { filter: brightness(1.16); }
 .controls button:disabled { opacity: .48; box-shadow: none; }
+.controls .bug-button {
+  min-width: 34px;
+  padding: 0 4px;
+  border: 0;
+  background: transparent;
+  color: #d6baff;
+}
+.bug-button[aria-pressed="true"] svg { visibility: hidden; }
+.bug-cursor {
+  position: fixed;
+  z-index: 5;
+  display: grid;
+  place-items: center;
+  transform: translate(-50%, -50%);
+  color: #ff9ba7;
+  filter: drop-shadow(0 0 6px #ff6d8bba);
+  pointer-events: none;
+}
+.is-placing-bug .map,
+.is-placing-bug .map-node { cursor: none; }
 .action-error {
   position: absolute;
   z-index: 3;
@@ -114,6 +134,7 @@ button:disabled { cursor: default; }
 .ne { inset: 5px 5px auto auto; border-width: 2px 2px 0 0; border-radius: 0 14px 0 0; }
 .sw { inset: auto auto 5px 5px; border-width: 0 0 2px 2px; border-radius: 0 0 0 14px; }
 .se { inset: auto 5px 5px auto; border-width: 0 2px 2px 0; border-radius: 0 0 14px; }
+.arena > .map { grid-area: 1 / 2 / 3 / 3; }
 .agent-A { grid-area: 1 / 1; }
 .agent-B { grid-area: 1 / 3; }
 .agent-C { grid-area: 2 / 1; }
@@ -247,6 +268,7 @@ button:disabled { cursor: default; }
     border-radius: 13px;
   }
   .agent-A { grid-area: 1 / 1; place-self: start; }
+  .arena > .map { grid-area: 2 / 1 / 3 / 3; }
   .agent-B { grid-area: 1 / 2; place-self: start end; }
   .agent-C { grid-area: 3 / 1; place-self: end start; }
   .agent-D { grid-area: 3 / 2; place-self: end; }

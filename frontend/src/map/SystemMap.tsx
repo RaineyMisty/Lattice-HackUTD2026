@@ -1,35 +1,36 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { PointerEvent } from 'react';
 import { boundsOf, dependencyPath, layoutTopology } from './layout';
 import type { Bounds } from './layout';
-import type { MapLink, MapNode, NodeAlert } from './topology';
+import type { MapGraph, MapPresentation } from './types';
 import './map.css';
 
-const alerts: Record<NodeAlert, string> = { attack: 'UNDER ATTACK', error: 'SERVICE ERROR', impact: 'DIRECT IMPACT' };
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(value, max));
 const center = (box: Bounds) => ({ x: (box.left + box.right) / 2, y: (box.top + box.bottom) / 2 });
 
 interface MapProps {
-  nodes: MapNode[];
-  links: MapLink[];
-  homeRegion: string;
+  graph: MapGraph;
+  presentation?: MapPresentation;
+  defaultView?: 'focus' | 'overview';
+  selectedNodeId?: string | null;
+  onSelectNode?: (id: string | null) => void;
 }
 
-export default function SystemMap({ nodes, links, homeRegion }: MapProps) {
+export default function SystemMap({ graph, presentation, defaultView = 'focus', selectedNodeId, onSelectNode }: MapProps) {
+  const { nodes, links, homeRegion } = graph;
+  const arrowId = useId();
   const viewport = useRef<HTMLDivElement>(null);
   const gesture = useRef<{ id: number; x: number; moved: boolean } | null>(null);
   const suppressClick = useRef(false);
   const [size, setSize] = useState({ width: 1, height: 1 });
-  const [selected, setSelected] = useState<string | null>(null);
-  const [zoom, setZoom] = useState(1);
+  const [zoom, setZoom] = useState(defaultView === 'overview' ? 0 : 1);
   const [pan, setPan] = useState(0);
   const [dragging, setDragging] = useState(false);
   const layout = useMemo(() => layoutTopology(nodes, links, homeRegion), [nodes, links, homeRegion]);
   const byId = new Map(layout.placements.map(item => [item.node.id, item]));
-  const selection = selected ? byId.get(selected) : undefined;
-  const warning = layout.placements.find(item => item.node.alert === 'attack' || item.node.alert === 'error')
-    ?? layout.placements.find(item => item.node.alert);
-  const focusRegion = selection?.node.region ?? warning?.node.region ?? homeRegion;
+  const selection = selectedNodeId ? byId.get(selectedNodeId) : undefined;
+  const focusNode = presentation?.focusNodeId ? byId.get(presentation.focusNodeId) : undefined;
+  const focusRegion = selection?.node.region ?? focusNode?.node.region ?? homeRegion;
   const related = new Set(selection ? [selection.node.id] : []);
   if (selection) {
     for (const link of links) {
@@ -38,7 +39,7 @@ export default function SystemMap({ nodes, links, homeRegion }: MapProps) {
     }
   }
   const close = layout.placements.filter(item => item.node.region === focusRegion && (!selection || related.has(item.node.id)));
-  const focusBox = boundsOf(close);
+  const focusBox = close.length ? boundsOf(close) : layout.bounds;
   const fit = (box: Bounds, padding: number) => Math.min(
     size.width / (box.right - box.left + padding),
     size.height / (box.bottom - box.top + padding),
@@ -51,7 +52,7 @@ export default function SystemMap({ nodes, links, homeRegion }: MapProps) {
   const overview = center(layout.bounds);
   const x = overview.x + (focus.x - overview.x) * blend;
   const y = overview.y + (focus.y - overview.y) * blend;
-  const isOverview = blend < .56;
+  const isOverview = scale <= overviewScale * 1.04 || blend < .56;
 
   useEffect(() => {
     const element = viewport.current;
@@ -72,14 +73,17 @@ export default function SystemMap({ nodes, links, homeRegion }: MapProps) {
       event.preventDefault();
       const units = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? size.height : 1;
       const change = Math.exp(clamp(-event.deltaY * units * .0024, -.44, .44));
-      setZoom(current => clamp(current * change, overviewScale / baseScale, Math.max(baseScale, 2.2) / baseScale));
+      const minZoom = overviewScale / baseScale;
+      const maxZoom = Math.max(baseScale, 2.2) / baseScale;
+      setZoom(current => clamp(clamp(current, minZoom, maxZoom) * change, minZoom, maxZoom));
     };
     element.addEventListener('wheel', wheel, { passive: false });
     return () => element.removeEventListener('wheel', wheel);
   }, [baseScale, overviewScale, size.height]);
 
   function select(id: string | null) {
-    setSelected(id === selected ? null : id);
+    if (!onSelectNode) return;
+    onSelectNode(id);
     setZoom(1);
   }
 
@@ -118,7 +122,7 @@ export default function SystemMap({ nodes, links, homeRegion }: MapProps) {
         onPointerMove={move} onPointerUp={finish} onPointerCancel={finish} onLostPointerCapture={finish}
         onPointerLeave={event => { if (!gesture.current?.moved) finish(event); }}>
         <defs>
-          <marker id="map-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="4.5" markerHeight="4.5" orient="auto">
+          <marker id={arrowId} viewBox="0 0 10 10" refX="8" refY="5" markerWidth="4.5" markerHeight="4.5" orient="auto">
             <path d="M0 0L10 5L0 10Z" fill="context-stroke" />
           </marker>
         </defs>
@@ -135,20 +139,21 @@ export default function SystemMap({ nodes, links, homeRegion }: MapProps) {
               const to = byId.get(link.to);
               if (!from || !to || from === to) return null;
               const crossRegion = from.node.region !== to.node.region;
-              const highlighted = selection && (link.from === selection.node.id || link.to === selection.node.id);
-              if (crossRegion && !isOverview && !highlighted) return null;
-              const variant = from.node.alert ? 'warn' : from.node.risk === 'downstream' ? 'downstream' : from.node.risk === 'unaffected' ? 'unaffected' : '';
-              return <path key={`${link.from}:${link.to}`} className={`map-edge ${variant} ${crossRegion ? 'cross-region' : ''} ${highlighted ? 'highlighted' : ''}`}
-                d={dependencyPath(from, to)} markerEnd="url(#map-arrow)" />;
+              const style = presentation?.links?.[link.id];
+              if (crossRegion && !isOverview && !style?.emphasized) return null;
+              return <path key={link.id} data-map-link={link.id}
+                className={`map-edge tone-${style?.tone ?? 'neutral'} ${crossRegion ? 'cross-region' : ''} ${style?.emphasized ? 'highlighted' : ''}`}
+                d={dependencyPath(from, to)} markerEnd={`url(#${arrowId})`} />;
             })}
             {layout.placements.map(({ node, x: nodeX, y: nodeY, width, height }) => {
-              const status = node.alert ? alerts[node.alert]
-                : node.risk === 'downstream' ? 'Downstream risk' : node.risk === 'unaffected' ? 'Unaffected' : '';
+              const style = presentation?.nodes?.[node.id];
+              const status = style?.caption;
               const accessibleName = status ? `${node.label}, ${status}` : node.label;
               return (
-                <g key={node.id} className={`map-node kind-${node.kind} ${node.major ? 'major' : ''} ${node.alert ? 'warn' : ''} ${selected === node.id ? 'selected' : ''} ${selection && !related.has(node.id) ? 'dimmed' : ''}`}
+                <g key={node.id} className={`map-node kind-${node.kind} tone-${style?.tone ?? 'neutral'} ${node.major ? 'major' : ''} ${style?.pulse ? 'pulsing' : ''} ${selectedNodeId === node.id ? 'selected' : ''} ${style?.muted ? 'dimmed' : ''}`}
                   data-map-node={node.id} data-kind={node.kind} transform={`translate(${nodeX} ${nodeY})`}
-                  role="button" tabIndex={0} aria-label={accessibleName} aria-pressed={selected === node.id}
+                  role={onSelectNode ? 'button' : 'img'} tabIndex={onSelectNode ? 0 : undefined} aria-label={accessibleName}
+                  aria-pressed={onSelectNode ? selectedNodeId === node.id : undefined}
                   onClick={() => { if (!suppressClick.current) select(node.id); }}
                   onKeyDown={event => {
                     if (event.key === 'Enter' || event.key === ' ') {
@@ -156,7 +161,7 @@ export default function SystemMap({ nodes, links, homeRegion }: MapProps) {
                       select(node.id);
                     }
                   }}>
-                  <rect key={node.alert ?? 'normal'} className="map-tile" x={-width / 2} y={-height / 2} width={width} height={height} rx={node.major ? 12 : 8} />
+                  <rect className="map-tile" x={-width / 2} y={-height / 2} width={width} height={height} rx={node.major ? 12 : 8} />
                   <text className="map-label" textAnchor="middle" y={status ? -3 : 5}>{node.label}</text>
                   {status && <text className="map-node-status" textAnchor="middle" y={15}>{status}</text>}
                 </g>

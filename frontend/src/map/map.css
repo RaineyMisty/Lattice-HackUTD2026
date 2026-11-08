@@ -1,5 +1,4 @@
 .map {
-  grid-area: 1 / 2 / 3 / 3;
   position: relative;
   min-width: 0;
   min-height: 0;
@@ -24,9 +23,9 @@
   pointer-events: none;
 }
 .map-edge.cross-region { opacity: .25; }
-.map-edge.downstream { stroke: var(--downstream); }
-.map-edge.unaffected { stroke: var(--unaffected); }
-.map-edge.warn { stroke: #ff8e9a; }
+.map-edge.tone-caution { stroke: #ffd78a; }
+.map-edge.tone-positive { stroke: #85f0c7; }
+.map-edge.tone-warning { stroke: #ff8e9a; }
 .map-edge.highlighted { stroke-width: 2.35; opacity: 1; }
 .map-node { --tile-color: #bdc6ed; cursor: pointer; transition: opacity 160ms; }
 .map.is-dragging .map-node { cursor: grabbing; }
@@ -35,7 +34,7 @@
 .map-node.kind-queue { --tile-color: #edce9d; }
 .map-node.kind-gateway { --tile-color: #a5e8cc; }
 .map-node.dimmed { opacity: .43; }
-.map-node.warn { --tile-color: #ff9ba7; opacity: 1; }
+.map-node.tone-warning { --tile-color: #ff9ba7; }
 .map-tile {
   fill: color-mix(in srgb, var(--tile-color) 10%, #252a4c);
   stroke: color-mix(in srgb, var(--tile-color) 45%, #565980);
@@ -53,19 +52,20 @@
 .map-label { fill: var(--tile-color); font-size: 16px; font-weight: 650; pointer-events: none; }
 .map-node.major .map-label { font-size: 19px; font-weight: 720; }
 .map-node-status { fill: var(--tile-color); font-size: 11px; pointer-events: none; }
-.map-node.warn .map-tile {
+.map-node.tone-caution .map-node-status { fill: #ffd78a; }
+.map-node.tone-positive .map-node-status { fill: #85f0c7; }
+.map-node.tone-warning .map-tile {
   fill: #613447;
   stroke: #ff7c8d;
   stroke-width: 2;
-  animation: map-warning 1.35s ease-out 3;
 }
-.map-node.warn .map-node-status { letter-spacing: .1em; font-weight: 750; }
+.map-node.pulsing .map-tile { animation: map-warning 1.35s ease-out 3; }
+.map-node.tone-warning .map-node-status { letter-spacing: .1em; font-weight: 750; }
 @keyframes map-warning {
   0%, 100% { filter: drop-shadow(0 0 2px #ff6d8b55); }
   38% { filter: drop-shadow(0 0 10px #ff6d8bd0); }
 }
-@media (max-width: 759px) { .map { grid-area: 2 / 1 / 3 / 3; } }
 @media (prefers-reduced-motion: reduce) {
   .map-camera, .map-pan { transition: none; }
-  .map-node.warn .map-tile { animation: none; }
+  .map-node.pulsing .map-tile { animation: none; }
 }

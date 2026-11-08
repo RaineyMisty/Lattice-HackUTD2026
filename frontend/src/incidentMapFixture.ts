@@ -1,20 +1,9 @@
-import type { RiskStatus, WorldSnapshot } from '../../../shared/types';
+import type { MapLink, MapNode, NodeKind } from './map/types';
 
-export type NodeKind = 'service' | 'component' | 'data' | 'queue' | 'gateway';
-export type NodeAlert = 'attack' | 'error' | 'impact';
-export interface MapNode {
-  id: string;
-  label: string;
-  region: string;
-  kind: NodeKind;
-  major?: boolean;
-  alert?: NodeAlert;
-  risk?: RiskStatus;
-}
-export interface MapLink { from: string; to: string }
+const edge = (from: string, to: string): MapLink => ({ id: JSON.stringify([from, to]), from, to });
 
 export const incidentRegion = 'Identity Core';
-const primaryNodes: MapNode[] = [
+export const primaryNodes: MapNode[] = [
   { id: 'tokengate', label: 'TokenGate', region: incidentRegion, kind: 'component', major: true },
   { id: 'auth', label: 'Auth Service', region: incidentRegion, kind: 'service', major: true },
   { id: 'reporting', label: 'Reporting', region: incidentRegion, kind: 'service' },
@@ -42,17 +31,17 @@ const resourceKinds: NodeKind[][] = [
   ['queue', 'gateway', 'gateway', 'data'],
 ];
 
-// Fictional surrounding topology for the small incident exercise.
-const demoNodes: MapNode[] = [];
-const demoLinks: MapLink[] = [];
+// Fictional context around the live incident nodes.
+export const demoNodes: MapNode[] = [];
+export const demoLinks: MapLink[] = [];
 regions.forEach(([region, services, resources, parent], index) => {
   services.forEach((label, position) => {
     const id = `zone-${index}-service-${position}`;
     const resource = `zone-${index}-resource-${position}`;
     demoNodes.push({ id, label, region, kind: 'service', major: position === 0 });
     demoNodes.push({ id: resource, label: resources[position], region, kind: resourceKinds[index][position] });
-    demoLinks.push({ from: id, to: resource });
-    if (position === 0) demoLinks.push({ from: id, to: parent });
+    demoLinks.push(edge(id, resource));
+    if (position === 0) demoLinks.push(edge(id, parent));
   });
 });
 for (const [id, label, kind, service, region] of [
@@ -62,32 +51,5 @@ for (const [id, label, kind, service, region] of [
   ['merchant-gateway', 'Merchant Gateway', 'gateway', 'merchant', 'Merchant Ops'],
 ] as const) {
   demoNodes.push({ id, label, region, kind });
-  demoLinks.push({ from: service, to: id });
-}
-
-export function buildTopology(world: WorldSnapshot | null) {
-  const assets = new Map(world?.assets.map(asset => [asset.id, asset]));
-  const inventory = [...primaryNodes];
-  for (const asset of assets.values()) {
-    if (inventory.some(node => node.id === asset.id)) continue;
-    inventory.push({
-      id: asset.id, label: asset.name, region: asset.department || 'Services',
-      kind: 'service', major: asset.businessCriticality === 'critical',
-    });
-  }
-  for (const edge of world?.dependencies ?? []) {
-    if (edge.kind !== 'component' || inventory.some(node => node.id === edge.to)) continue;
-    inventory.push({
-      id: edge.to, label: edge.to, region: inventory.find(node => node.id === edge.from)?.region ?? incidentRegion,
-      kind: 'component',
-    });
-  }
-  const liveNodes = inventory.map(node => {
-    const asset = assets.get(node.id);
-    if (!asset) return node;
-    const alert: NodeAlert | undefined = asset.health ?? (asset.status === 'direct' ? 'impact' : undefined);
-    return { ...node, label: asset.name, alert, risk: asset.status };
-  });
-  if (assets.size > 4) return { nodes: liveNodes, links: world?.dependencies ?? [] };
-  return { nodes: [...liveNodes, ...demoNodes], links: [...(world?.dependencies ?? []), ...demoLinks] };
+  demoLinks.push(edge(service, id));
 }

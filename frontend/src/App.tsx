@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from 'react';
-import { Box, Crosshair, GitBranch, Layers3, Play, RotateCcw, Users } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Box, Bug, Crosshair, GitBranch, Layers3, Play, RotateCcw, Users } from 'lucide-react';
 import { DbConnection, tables } from '../../db/client';
 import type { AgentState, WorldSnapshot } from '../../shared/types';
 
 import SystemMap from './map/SystemMap';
-import { buildTopology, incidentRegion } from './map/topology';
+import { buildIncidentGraph, incidentPresentation } from './incidentMap';
+import { withSelection } from './mapSelection';
 
 const agents = [
   { id: 'A', callsign: 'Vulnerability', icon: Crosshair, color: 'violet' },
@@ -36,7 +37,41 @@ export default function App() {
   const [connection, setConnection] = useState<DbConnection | null>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
-  const map = useMemo(() => buildTopology(world), [world]);
+  const [selected, setSelected] = useState<string | null>(null);
+  const [bugNodeId, setBugNodeId] = useState<string | null>(null);
+  const [pickup, setPickup] = useState<{ x: number; y: number } | null>(null);
+  const bugCursor = useRef<HTMLSpanElement>(null);
+  const graph = useMemo(() => buildIncidentGraph(world), [world]);
+  const presentation = withSelection(graph, incidentPresentation(world, graph, bugNodeId), selected);
+
+  useEffect(() => {
+    if (!pickup) return;
+    const move = (event: PointerEvent) => {
+      if (!bugCursor.current) return;
+      bugCursor.current.style.left = `${event.clientX}px`;
+      bugCursor.current.style.top = `${event.clientY}px`;
+    };
+    const cancel = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setPickup(null);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('keydown', cancel);
+    return () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('keydown', cancel);
+    };
+  }, [pickup]);
+
+  function selectNode(id: string | null) {
+    if (pickup) {
+      if (!id || graph.nodes.find(node => node.id === id)?.kind !== 'service') return;
+      setBugNodeId(id);
+      setSelected(id);
+      setPickup(null);
+    } else {
+      setSelected(current => current === id ? null : id);
+    }
+  }
 
   useEffect(() => {
     const token = sessionStorage.getItem(tokenKey);
@@ -85,7 +120,12 @@ export default function App() {
     setError('');
     try {
       if (action === 'start') await connection.reducers.injectIncident({});
-      else await connection.reducers.resetDemo({});
+      else {
+        await connection.reducers.resetDemo({});
+        setSelected(null);
+        setBugNodeId(null);
+        setPickup(null);
+      }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -94,7 +134,7 @@ export default function App() {
   }
 
   return (
-    <main className="console">
+    <main className={`console${pickup ? ' is-placing-bug' : ''}`}>
       <header className="topbar">
         <div className="brand">
           <div className="brand-mark"><Box size={25} strokeWidth={1.6} /></div>
@@ -104,6 +144,19 @@ export default function App() {
           <h1>{world?.incident?.title ?? 'TokenGate incident response'}</h1>
         </div>
         <div className="controls">
+          <button type="button" className="bug-button" aria-label="Place bug" aria-pressed={!!pickup}
+            title={pickup ? 'Cancel bug placement' : 'Place bug'} onClick={event => {
+              if (pickup) {
+                setPickup(null);
+                return;
+              }
+              const box = event.currentTarget.getBoundingClientRect();
+              setPickup(event.detail
+                ? { x: event.clientX, y: event.clientY }
+                : { x: box.left + box.width / 2, y: box.top + box.height / 2 });
+            }}>
+            <Bug size={23} strokeWidth={1.75} aria-hidden="true" />
+          </button>
           {world?.incident ? (
             <button onClick={() => void control('reset')} disabled={!connection || busy}><RotateCcw size={16} /> Reset</button>
           ) : (
@@ -113,10 +166,14 @@ export default function App() {
         </div>
       </header>
 
+      {pickup && <span ref={bugCursor} className="bug-cursor" style={{ left: pickup.x, top: pickup.y }} aria-hidden="true">
+        <Bug size={25} strokeWidth={2} />
+      </span>}
+
       <section className="arena" aria-label="System state and agent activity">
         <div className="arena-corner nw" /><div className="arena-corner ne" />
         <div className="arena-corner sw" /><div className="arena-corner se" />
-        <SystemMap nodes={map.nodes} links={map.links} homeRegion={incidentRegion} />
+        <SystemMap graph={graph} presentation={presentation} selectedNodeId={selected} onSelectNode={selectNode} />
 
         {agents.map(config => (
           <AgentCard key={config.id} config={config} agent={world?.incident ? world.agents.find(agent => agent.id === config.id) : undefined} />

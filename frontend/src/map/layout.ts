@@ -1,4 +1,4 @@
-import type { MapLink, MapNode } from './topology';
+import type { MapLink, MapNode } from './types';
 
 export interface Bounds { left: number; right: number; top: number; bottom: number }
 export interface Placement { node: MapNode; x: number; y: number; width: number; height: number }
@@ -6,7 +6,7 @@ interface Region { name: string; bounds: Bounds }
 
 const rowGap = 104;
 const columnGap = 26;
-const isService = (node: MapNode) => node.kind === 'service' || node.kind === 'component';
+const isPrimary = (node: MapNode) => !['data', 'queue', 'gateway', 'config', 'container'].includes(node.kind);
 
 export function boundsOf(placements: Placement[]): Bounds {
   if (!placements.length) return { left: -100, right: 100, top: -60, bottom: 60 };
@@ -18,8 +18,8 @@ export function boundsOf(placements: Placement[]): Bounds {
   };
 }
 
-function arrangeRegion(nodes: MapNode[], links: MapLink[]) {
-  const services = nodes.filter(isService);
+function arrangeRegion(nodes: MapNode[], links: readonly MapLink[]) {
+  const services = nodes.filter(isPrimary);
   const serviceIds = new Set(services.map(node => node.id));
   const hasComponent = services.some(node => node.kind === 'component');
   const rank = new Map(services.map(node => [node.id, hasComponent && node.kind !== 'component' ? 1 : 0]));
@@ -45,7 +45,7 @@ function arrangeRegion(nodes: MapNode[], links: MapLink[]) {
   const rows = new Map<number, MapNode[]>();
   const lastServiceRank = Math.max(0, ...rank.values());
   for (const node of nodes) {
-    const layer = isService(node) ? rank.get(node.id)! : lastServiceRank + 1;
+    const layer = isPrimary(node) ? rank.get(node.id)! : lastServiceRank + 1;
     const row = rows.get(layer) ?? [];
     row.push(node);
     rows.set(layer, row);
@@ -71,7 +71,7 @@ function arrangeRegion(nodes: MapNode[], links: MapLink[]) {
   return placements.map(item => ({ ...item, y: item.y - middle }));
 }
 
-export function layoutTopology(nodes: MapNode[], links: MapLink[], homeRegion: string) {
+export function layoutTopology(nodes: readonly MapNode[], links: readonly MapLink[], homeRegion: string) {
   const groups = new Map<string, MapNode[]>();
   for (const node of nodes) {
     const group = groups.get(node.region) ?? [];
