@@ -38,6 +38,7 @@ import ClaimTaskReducer from "./claim_task_reducer";
 import ClearBugReducer from "./clear_bug_reducer";
 import CreateSimulationReducer from "./create_simulation_reducer";
 import CreateWorldReducer from "./create_world_reducer";
+import ReleaseExplorationTaskReducer from "./release_exploration_task_reducer";
 import RequestEventReducer from "./request_event_reducer";
 import ReviewDiscoveryReducer from "./review_discovery_reducer";
 import SetBugReducer from "./set_bug_reducer";
@@ -143,6 +144,7 @@ const reducersSchema = __reducers(
   __reducerSchema("clear_bug", ClearBugReducer),
   __reducerSchema("create_simulation", CreateSimulationReducer),
   __reducerSchema("create_world", CreateWorldReducer),
+  __reducerSchema("release_exploration_task", ReleaseExplorationTaskReducer),
   __reducerSchema("request_event", RequestEventReducer),
   __reducerSchema("review_discovery", ReviewDiscoveryReducer),
   __reducerSchema("set_bug", SetBugReducer),

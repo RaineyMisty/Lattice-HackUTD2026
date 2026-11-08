@@ -6,14 +6,8 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const temporary = resolve(root, '.data/test-temp');
 mkdirSync(temporary, { recursive: true });
 const env = { ...process.env, TEMP: temporary, TMP: temporary, TMPDIR: temporary };
-const commands = [
-  ...(!process.argv.includes('--database-only') ? [[
-    '--import', 'tsx', '--test',
-    'db/src/domain/domain.test.ts',
-    'agents/src/explorer.test.ts',
-  ]] : []),
-  ['node_modules/vitest/vitest.mjs', 'run', '--config', 'db/vitest.config.ts'],
-];
+const suites = process.argv.includes('--database-only') ? ['spacetime_db/test/live.test.ts'] : ['agents/harness/model.test.ts', 'agents/harness/tools.test.ts'];
+const commands = [['--import', 'tsx', '--test', ...suites]];
 for (const args of commands) {
   const result = spawnSync(process.execPath, args, { cwd: root, stdio: 'inherit', env });
   if (result.error) { console.error(result.error); process.exit(1); }

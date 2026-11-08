@@ -230,6 +230,20 @@ export const claimTask = db.reducer({ worldId: t.string(), taskId: t.string(), l
   ctx.db.lease.insert({ scheduledId: 0n, scheduledAt: ScheduleAt.time(at), taskId: task.id, attempt });
 });
 
+export const releaseExplorationTask = db.reducer({
+  worldId: t.string(), taskId: t.string(), attempt: t.u8(), retry: t.bool(),
+}, (ctx, args) => {
+  worldRole(ctx, args.worldId, ['owner', 'agent']);
+  const task = ctx.db.frontier.id.find(args.taskId);
+  ensure(task?.worldId === args.worldId, 'Unknown exploration task');
+  if (task.status !== 'leased' || task.attempt !== args.attempt) return;
+  ensure(task.claimant?.equals(ctx.sender), 'Task lease does not belong to this agent');
+  ctx.db.frontier.id.update({
+    ...task, status: task.attempt >= 255 || (args.retry && task.attempt >= MAX_ATTEMPTS) ? 'dead' : 'queued',
+    claimant: undefined, deadline: undefined,
+  });
+});
+
 export const expireLease = db.reducer({ onSchedule: lease }, { arg: lease.rowType }, (ctx, { arg }) => {
   ensure(ctx.sender.equals(ctx.identity), 'Scheduler only');
   const task = ctx.db.frontier.id.find(arg.taskId);

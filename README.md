@@ -17,9 +17,17 @@ The dev server starts its own local SpacetimeDB instance on port 3382 and opens 
 
 **Start** creates a simulation for the selected repository and starts its four Explorers. Verified findings grow the map and appear in the Agent speech bubbles. Use the bug icon to inject a fault, or pick up the wrench and click the red fault origin to remove its impact and cancel its pending events. Already executed behavior state stays in the simulation history. **Reset** stops the selected simulation and its active exploration, keeping discoveries in the database.
 
-The four Explorers share one implementation and choose distinct initial paths using their seeds. Explorers keep claiming tasks until Reset or shutdown. When the Frontier drains, the runner schedules another batch of unexplored source files and waits once those files are exhausted. Each starts from one seeded Git-tracked file. The model uses read-only tools to inspect the repository, choose where to explore, and queue follow-up files. Discoveries are checked against the selected commit before submission. The private browser link is saved at `.data/interactive-demo/browser-url.txt` if you need to reopen it. Ctrl+C closes the demo processes. Model requests use the NVIDIA key in the terminal and call NVIDIA directly. Agents publish small batches during exploration, and the terminal reports each write as it happens.
+The four Explorers share one Harness and claim work independently using separate SpacetimeDB identities. Explorers keep claiming tasks until Reset or shutdown. When the Frontier drains, the runner schedules another batch of unexplored source files and waits once those files are exhausted. Each starts from one seeded Git-tracked file. The model uses read-only tools to inspect the repository, choose where to explore, and queue follow-up files. Discoveries are checked against the selected commit before submission. The private browser link is saved at `.data/interactive-demo/browser-url.txt` if you need to reopen it. Ctrl+C closes the demo processes. Model requests use the NVIDIA key in the terminal and call NVIDIA directly. Agents publish small batches during exploration, and the terminal reports each write as it happens.
 
-The terminal shows each Explorer's task, model progress, verified or skipped candidates, and database commits. A pending line every ten seconds identifies the current stage. A directory proposed as a follow-up is skipped.
+The terminal shows each Explorer’s task, tool calls, and publication receipts. Temporary provider errors retry. A task is completed only after the model explicitly finishes it.
+
+## Agent layout
+
+- `agents/harness/` runs the NVIDIA tool loop, Git source tools, and workers.
+- `agents/skill/` describes how to explore, cite source, and submit discoveries.
+- `agents/spacetimedb/` handles subscriptions, leases, and discovery writes through generated bindings.
+
+Deployments used by the standalone Agent CLI need the current database module for immediate task release. The interactive dev command publishes the local module automatically.
 
 ## Run against a local repository world
 
@@ -37,10 +45,10 @@ Publish with your CLI identity if the module is new.
 spacetime publish lattice-world-local --server http://127.0.0.1:3380 --module-path spacetime_db
 ```
 
-In an Agent terminal with `NVIDIA_API_KEY` set, explore a clean local Git checkout. The first run creates a world at the actual commit. The example limits each Explorer to two turns.
+In an Agent terminal with `NVIDIA_API_KEY` set, explore a clean local Git checkout. The first run creates a world pinned to the actual commit. Explorers run until stopped.
 
 ```powershell
-node --import tsx agents/src/explore-cli.ts ".\repo\train-ticket" --world train-ticket --create-world --provider nvidia --agents 4 --turns 2
+npm.cmd run agent -- ".\repo\train-ticket" --world train-ticket --create-world --agents 4
 ```
 
 Once the Agent CLI prints the running status, configure browser access in a frontend terminal.
@@ -61,4 +69,4 @@ Use `npm.cmd run dev -- --existing-world` to view an already provisioned world. 
 
 The publisher creates the world and uses `setMember` to grant the browser identity reader or operator access. When access is required, the page logs the browser identity to the developer console. The map starts empty and draws the selected world's subscribed entities and relations as they arrive.
 
-The Agent CLI subscribes and writes to SpacetimeDB when given `--world`. Without that option it runs an in-memory exploration. See [Agent usage](agents/README.md) for connection options and [database APIs](spacetime_db/README.md) for simulation and permissions.
+The Agent CLI requires a repository world. See [database APIs](spacetime_db/README.md) for simulation and permissions.

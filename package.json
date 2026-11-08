@@ -13,8 +13,8 @@
     "typecheck": "tsc --noEmit",
     "test": "node scripts/test.mjs",
     "test:db": "node scripts/test.mjs --database-only",
-    "test:live": "node --import tsx --test db/test/live.test.ts",
-    "agent": "tsx agents/src/explore-cli.ts",
+    "test:live": "node --import tsx --test spacetime_db/test/live.test.ts",
+    "agent": "tsx agents/harness/cli.ts",
     "setup:local": "tsx scripts/setup-local.ts"
   },
   "dependencies": {

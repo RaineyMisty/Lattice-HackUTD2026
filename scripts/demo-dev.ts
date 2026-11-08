@@ -6,21 +6,21 @@ import { basename, join, resolve } from 'node:path';
 import { setTimeout as pause } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { createServer, type ViteDevServer } from 'vite';
-import { AgentManager, CodexHarness, printAgentActivity, SpacetimeExplorationDatabase, type CodingHarness, type ExplorationHandle } from '../agents/src/index.ts';
-import { repositoryHead, repositoryRevision, repositoryRoot } from '../agents/src/explorer/repository.ts';
+import { startExploration, printActivity, type Exploration } from '../agents/harness/run.ts';
+import type { Model } from '../agents/harness/model.ts';
+import { repositoryHead, repositoryRevision, repositoryRoot } from '../agents/harness/repository.ts';
 import { tables, type DbConnection, type Simulation } from '../spacetime_db/client/index.ts';
 import { connectDatabase, publisherToken, spacetimeCli } from './local-world.ts';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
-const log = (message: string) => printAgentActivity({ at: new Date().toISOString(), agentId: 'demo', kind: 'lifecycle', message });
+const log = (message: string) => printActivity({ agent: 'demo', message });
 
 interface DemoOptions {
-  harness?: CodingHarness;
+  model?: Model;
   openBrowser?: boolean;
   dbPort?: number;
   webPort?: number;
   dataDirectory?: string;
-  turns?: number;
   repositoryDirectory?: string;
 }
 
@@ -31,7 +31,7 @@ interface DemoRepository {
   commit: string;
   role?: 'reader' | 'operator';
   simulationId?: string;
-  run?: ExplorationHandle;
+  run?: Exploration;
 }
 
 async function repositoryFolders(directory: string) {
@@ -80,7 +80,6 @@ export async function startDemo(options: DemoOptions = {}) {
   if (configuredWebPort === undefined) {
     while (webPort < 5183 && (webPort === dbPort || await listening(webPort))) webPort++;
   }
-  const turns = options.turns;
   if (dbPort === webPort || await listening(dbPort) || await listening(webPort)) {
     throw new Error(`Demo ports ${webPort} (web) and ${dbPort} (database) must be free`);
   }
@@ -93,7 +92,7 @@ export async function startDemo(options: DemoOptions = {}) {
   const uri = `http://127.0.0.1:${dbPort}`;
   const database = 'lattice-train-ticket-demo';
   const config = { uri, database };
-  const modelReady = !!options.harness || !!process.env.NVIDIA_API_KEY?.trim();
+  const modelReady = !!options.model || !!process.env.NVIDIA_API_KEY?.trim();
   const label = 'Repository demo';
   let server: ChildProcess | undefined;
   let owner: DbConnection | undefined;
@@ -191,20 +190,15 @@ export async function startDemo(options: DemoOptions = {}) {
       log(`Start committed for ${repository.name}; preparing four Explorer sessions`);
       pending = pending.then(async () => {
         if (closed || client.db.worldSimulations.id.find(row.id)?.status !== 'running') return;
-        const harness = options.harness ?? new CodexHarness({ provider: 'nvidia' });
-        const manager = new AgentManager({
-          database: new SpacetimeExplorationDatabase({ ...config, token, worldId: repository.worldId }), harness, onActivity: printAgentActivity,
-        });
-        const handle = await manager.start({
-          repositoryPath: repository.path, agentCount: 4, maxTurnsPerAgent: turns,
+        const handle = await startExploration({
+          repositoryPath: repository.path, model: options.model, onActivity: printActivity,
+          world: { ...config, token, worldId: repository.worldId },
         });
         repository.run = handle;
-        log(`${repository.name} exploration started with four Agents (${turns === undefined ? 'continuous Frontier' : turns + ' turns maximum per Agent'})`);
-        void handle.done.then(async result => {
-          const { world } = await manager.getContext(handle.id);
-          const queued = world?.frontier.filter(task => task.status === 'queued').length ?? 0;
-          log(`${repository.name} exploration ${result.phase}. ${world?.entities.length ?? 0} entities, ${world?.relations.length ?? 0} relations, ${world?.behaviors.length ?? 0} behaviors. ${queued} tasks remain queued.`);
-        }).catch(error => log(`Could not summarize exploration — ${error instanceof Error ? error.message : String(error)}`));
+        log(`${repository.name} exploration started with four Agents`);
+        void handle.done.then(result => {
+          log(`${repository.name} exploration ${result.phase}. ${result.entities} entities, ${result.relations} relations, ${result.behaviors} behaviors. ${result.queued} tasks remain queued.`);
+        }).catch(error => log(`Could not summarize exploration — ${String(error)}`));
       }).catch(error => log(`Could not start exploration — ${error instanceof Error ? error.message : String(error)}`));
     };
     client.db.worldSimulations.onInsert((_context, row) => start(row));
