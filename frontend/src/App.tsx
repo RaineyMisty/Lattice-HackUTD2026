@@ -12,6 +12,8 @@ const agents = [
   { id: 'C', icon: Layers3, color: 'indigo' },
   { id: 'D', icon: Users, color: 'mint' },
 ] as const;
+const demoLabel = import.meta.env.VITE_LATTICE_DEMO_LABEL;
+const emptyMessages: AgentMessage[] = [];
 
 export default function App() {
   const { snapshot, connection, error: feedError } = useWorldFeed();
@@ -23,6 +25,7 @@ export default function App() {
   const simulationKey = snapshot ? simulationStorageKey(snapshot.world.id) : '';
   const simulation = snapshot?.simulations.find(row => row.id === sessionStorage.getItem(simulationKey) && row.status === 'running');
   const canControl = !!connection && !!snapshot?.canSimulate && !busy;
+  const hasService = snapshot?.entities.some(row => row.active && row.kind === 'service');
   const placing = !!pickup && !!simulation && !!connection;
   const graph = useMemo(() => buildRepositoryGraph(snapshot?.entities, snapshot?.relations), [snapshot?.entities, snapshot?.relations]);
   const impact = presentSimulation(snapshot?.entities ?? [], snapshot?.states ?? [], simulation?.id);
@@ -68,6 +71,10 @@ export default function App() {
 
   async function control() {
     if (!canControl || !connection || !snapshot) return;
+    if (!simulation && demoLabel && import.meta.env.VITE_LATTICE_DEMO_MODEL_READY === false) {
+      setError('Set NVIDIA_API_KEY in PowerShell and restart the dev server');
+      return;
+    }
     setBusy(true);
     setError('');
     try {
@@ -76,7 +83,7 @@ export default function App() {
         sessionStorage.removeItem(simulationKey);
       } else {
         const id = `sim-${crypto.randomUUID()}`;
-        await connection.reducers.createSimulation({ worldId: snapshot.world.id, id, label: 'Dependency impact' });
+        await connection.reducers.createSimulation({ worldId: snapshot.world.id, id, label: demoLabel || 'Dependency impact' });
         sessionStorage.setItem(simulationKey, id);
       }
       setSelected(null);
@@ -100,7 +107,7 @@ export default function App() {
         </div>
         <div className="controls">
           <button type="button" className="bug-button" aria-label="Place bug" aria-pressed={placing}
-            disabled={!canControl || !simulation} title={placing ? 'Cancel bug placement' : 'Place bug'} onClick={event => {
+            disabled={!canControl || !simulation || !hasService} title={placing ? 'Cancel bug placement' : 'Place bug'} onClick={event => {
               if (placing) {
                 setPickup(null);
                 return;
@@ -126,7 +133,7 @@ export default function App() {
       <section className="arena" aria-label="System state and agent activity">
         <div className="arena-corner nw" /><div className="arena-corner ne" />
         <div className="arena-corner sw" /><div className="arena-corner se" />
-        <SystemMap graph={graph} presentation={presentation} selectedNodeId={selected} onSelectNode={id => void selectNode(id)} />
+        <SystemMap graph={graph} presentation={presentation} defaultView={demoLabel ? 'overview' : 'focus'} selectedNodeId={selected} onSelectNode={id => void selectNode(id)} />
 
         {agents.map((config, index) => <AgentCard key={config.id} config={config} activity={snapshot?.messages[index]} />)}
       </section>
@@ -141,7 +148,7 @@ export default function App() {
   );
 }
 
-function AgentCard({ config, activity }: { config: typeof agents[number]; activity?: AgentMessage }) {
+function AgentCard({ config, activity = emptyMessages }: { config: typeof agents[number]; activity?: AgentMessage[] }) {
   const Icon = config.icon;
   return (
     <article className={`agent-station agent-${config.id} ${config.color}`} aria-label={`Agent ${config.id}`}>
@@ -150,21 +157,19 @@ function AgentCard({ config, activity }: { config: typeof agents[number]; activi
         <h2>Agent {config.id}</h2>
       </div>
       <div className="speech" role="status">
-        {activity && <AgentSpeech key={activity.at} {...activity} />}
+        <AgentSpeech activity={activity} />
       </div>
     </article>
   );
 }
 
-const speechLifetime = 5200;
-
-function AgentSpeech({ message, at }: AgentMessage) {
-  const [remaining] = useState(() => speechLifetime - Math.max(0, Date.now() - at));
-  const [visible, setVisible] = useState(remaining > 0);
+function AgentSpeech({ activity }: { activity: AgentMessage[] }) {
+  const [index, setIndex] = useState(0);
+  const next = activity[index];
   useEffect(() => {
-    if (remaining <= 0) return;
-    const timer = window.setTimeout(() => setVisible(false), remaining);
+    if (!next) return;
+    const timer = window.setTimeout(() => setIndex(index + 1), 2300);
     return () => window.clearTimeout(timer);
-  }, [remaining]);
-  return visible ? <p className="speech-bubble">{message}</p> : null;
+  }, [index, next]);
+  return next ? <p className="speech-bubble" key={next.id}>{next.message}</p> : null;
 }

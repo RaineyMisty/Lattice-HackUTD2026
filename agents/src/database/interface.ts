@@ -61,7 +61,7 @@ export interface AgentStatus {
 export interface ActivityRecord {
   at: string;
   agentId: string;
-  kind: 'lifecycle' | 'task' | 'tool' | 'verification';
+  kind: 'lifecycle' | 'task' | 'model' | 'tool' | 'verification' | 'database';
   message: string;
   taskId?: string;
 }

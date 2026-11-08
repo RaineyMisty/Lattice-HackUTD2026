@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { MemoryExplorationDatabase } from './database/client.ts';
-import type { AgentStatus, ExplorationDatabase, ExplorationTask, RunIdentity } from './database/interface.ts';
+import type { ActivityRecord, AgentStatus, ExplorationDatabase, ExplorationTask, RunIdentity } from './database/interface.ts';
 import { runExplorer } from './explorer/explorer.ts';
 import { CodexHarness } from './explorer/harness.ts';
 import type { CodingHarness } from './explorer/harness.ts';
@@ -13,6 +13,7 @@ export interface StartExploration {
   seed?: number;
   maxTurnsPerAgent?: number;
   turnTimeoutMs?: number;
+  serviceEntries?: ReadonlyMap<string, string>;
 }
 
 export interface RunStatus extends RunIdentity {
@@ -32,6 +33,7 @@ export interface ExplorationHandle {
 export interface AgentManagerOptions {
   database?: ExplorationDatabase;
   harness?: CodingHarness;
+  onActivity?(activity: ActivityRecord): void;
 }
 
 interface ActiveRun {
@@ -52,13 +54,18 @@ function integer(value: number, label: string, min: number, max: number) {
   return value;
 }
 
+function nextSeed(seed: number) {
+  seed ^= seed << 13;
+  seed ^= seed >>> 17;
+  seed ^= seed << 5;
+  return seed >>> 0;
+}
+
 function shuffled(files: string[], seed: number) {
   let state = seed || 0x9e3779b9;
   for (let i = files.length - 1; i > 0; i--) {
-    state ^= state << 13;
-    state ^= state >>> 17;
-    state ^= state << 5;
-    const j = (state >>> 0) % (i + 1);
+    state = nextSeed(state);
+    const j = state % (i + 1);
     [files[i], files[j]] = [files[j], files[i]];
   }
   return files;
@@ -67,11 +74,13 @@ function shuffled(files: string[], seed: number) {
 export class AgentManager {
   private readonly database: ExplorationDatabase;
   private readonly harness: CodingHarness;
+  private readonly onActivity?: AgentManagerOptions['onActivity'];
   private readonly runs = new Map<string, ActiveRun>();
 
   constructor(options: AgentManagerOptions = {}) {
     this.database = options.database ?? new MemoryExplorationDatabase();
     this.harness = options.harness ?? new CodexHarness();
+    this.onActivity = options.onActivity;
   }
 
   async start(options: StartExploration): Promise<ExplorationHandle> {
@@ -82,7 +91,7 @@ export class AgentManager {
     const turnTimeoutMs = integer(options.turnTimeoutMs ?? 180_000, 'turnTimeoutMs', 1, 1_200_000);
     const root = await repositoryRoot(options.repositoryPath);
     const [indexed, skill, revision] = await Promise.all([
-      indexSources(root),
+      options.serviceEntries ? Promise.resolve([...options.serviceEntries.values()]) : indexSources(root),
       readFile(new URL('./explorer/SKILL.md', import.meta.url), 'utf8'),
       this.database.commitBound ? repositoryRevision(root) : undefined,
     ]);
@@ -92,28 +101,38 @@ export class AgentManager {
     const startedAt = new Date().toISOString();
     const run: RunIdentity = { id: runId, repositoryPath: root, seed, commit: revision?.commit };
     const agents: AgentStatus[] = [];
-    const tasks: ExplorationTask[] = [];
+    const tasks: ExplorationTask[] = options.serviceEntries ? files.map(path => ({
+      id: stableId('service-entry', path), path,
+      question: 'Verify the service entry and trace its explicit cross-service calls from committed source.',
+    })) : [];
+    const available = [...tasks];
+    const firstTasks: string[] = [];
     for (let index = 0; index < agentCount; index++) {
       const id = `agent-${index + 1}`;
-      const startPath = files[index % files.length];
+      const agentSeed = (seed + Math.imul(index + 1, 0x9e3779b9)) >>> 0;
+      const task = options.serviceEntries
+        ? available.splice(nextSeed(agentSeed) % Math.max(1, available.length), 1)[0] ?? tasks[index % tasks.length]
+        : {
+          id: stableId('initial', id, files[index % files.length]), path: files[index % files.length],
+          question: revision ? 'Find definitions, dependencies, and executable behavior supported by this source.'
+            : lenses[(index + seed % lenses.length) % lenses.length],
+        };
       agents.push({
-        id, sessionId: randomUUID(), seed: (seed + Math.imul(index + 1, 0x9e3779b9)) >>> 0,
-        startPath, phase: 'queued', turns: 0, updatedAt: startedAt,
+        id, sessionId: randomUUID(), seed: agentSeed, startPath: task.path, phase: 'queued', turns: 0, updatedAt: startedAt,
       });
-      tasks.push({
-        id: stableId('initial', id, startPath), path: startPath,
-        question: revision ? 'Find definitions, dependencies, and executable behavior supported by this source.'
-          : lenses[(index + seed % lenses.length) % lenses.length],
-      });
+      if (!options.serviceEntries) tasks.push(task);
+      firstTasks.push(task.id);
     }
     await this.database.initializeRun(run, tasks, agents);
     const abort = new AbortController();
     const status: RunStatus = { ...run, startedAt, phase: 'running', agents };
     const workers = agents.map((agent, index) => runExplorer({
       scope: { runId, agentId: agent.id, sessionId: agent.sessionId },
-      initialStatus: agent, initialTaskId: tasks[index].id, repositoryPath: root, skill,
+      initialStatus: agent, initialTaskId: firstTasks[index], repositoryPath: root, skill,
       harness: this.harness, database: this.database, signal: abort.signal, maxTurns, turnTimeoutMs, stayOpen, commit: revision?.commit,
       onStatus: latest => { status.agents[index] = latest; },
+      onActivity: this.onActivity,
+      serviceEntries: options.serviceEntries,
     }));
     const done = Promise.all(workers).then(async results => {
       await this.database.closeRun?.(runId);

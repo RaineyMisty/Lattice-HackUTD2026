@@ -49,7 +49,7 @@ export async function verifyWorldUpdate(
   signal.throwIfAborted();
   const output = schema.parse(JSON.parse(response));
   const update: WorldUpdate = { entities: [], relations: [], behaviors: [], tasks: [] };
-  const rejected: string[] = [];
+  const rejected: { kind: string; path: string; reason: string }[] = [];
   const sources = new Map<string, ReturnType<typeof readRevisionSource>>();
   const active = new Set(world.entities.filter(row => row.active).map(row => row.key));
   const inactive = new Set(world.entities.filter(row => !row.active).map(row => row.key));
@@ -77,27 +77,27 @@ export async function verifyWorldUpdate(
     if (source.path.length > 768) throw new Error('Source path exceeds the database limit');
     return { ...input, path: source.path, excerpt: matchQuote(source.text, input.startLine, input.endLine, input.excerpt) };
   }
-  async function check(label: string, run: () => Promise<void>) {
+  async function check(kind: string, path: string, run: () => Promise<void>) {
     signal.throwIfAborted();
     try {
       await run();
     } catch (error) {
       signal.throwIfAborted();
-      rejected.push(`${label}: ${(error instanceof Error ? error.message : String(error)).split('\n')[0]}`);
+      rejected.push({ kind, path, reason: (error instanceof Error ? error.message : String(error)).split('\n')[0] });
     }
   }
 
-  for (const item of output.entities) await check('Entity', async () => {
+  for (const item of output.entities) await check('Entity', item.entity.path, async () => {
     const { key, ...node } = await entity(item.entity);
     if (inactive.has(key)) throw new Error('Entity was withdrawn from the world');
     update.entities.push({ ...node, source: await cite(item.source) });
     active.add(key);
   });
-  for (const item of output.relations) await check('Relation', async () => {
+  for (const item of output.relations) await check('Relation', item.source.path, async () => {
     const [from, to, source] = await Promise.all([endpoint(item.from), endpoint(item.to), cite(item.source)]);
     update.relations.push({ from, to, kind: item.kind, source });
   });
-  for (const item of output.behaviors) await check('Behavior', async () => {
+  for (const item of output.behaviors) await check('Behavior', item.source.path, async () => {
     const owner = await endpoint(item.entity);
     if (!item.rule.set.length && !item.rule.emit.length) throw new Error('Behavior needs an executable effect');
     const rule: BehaviorInput['rule'] = {
@@ -115,21 +115,25 @@ export async function verifyWorldUpdate(
     update.behaviors.push({ entity: owner, name: item.name, rule, source: await cite(item.source) });
     knownBehaviors.set(key, rule);
   });
-  for (const item of output.tasks) await check('Frontier', async () => {
+  for (const item of output.tasks) await check('Frontier', item.path, async () => {
     const { path } = await read(item.path);
     if (path.length > 768) throw new Error('Task path exceeds the database limit');
     update.tasks.push({ path, question: item.question });
   });
   signal.throwIfAborted();
-  return { update, rejected };
+  const proposed = `${output.entities.length} entities, ${output.relations.length} relations, ${output.behaviors.length} behaviors, ${output.tasks.length} follow-ups`;
+  return { update, rejected, proposed };
 }
 
 export function worldContextFor(task: ExplorationTask, world: WorldKnowledge) {
-  const direct = world.entities.filter(row => row.path === task.path);
+  const module = task.path.split('/')[0];
+  const direct = world.entities.filter(row => row.path === task.path
+    || (row.kind === 'service' && row.path.startsWith(`${module}/`)));
   const ids = new Set(direct.map(row => row.id));
   const relations = world.relations.filter(row => ids.has(row.from) || ids.has(row.to)).slice(0, 24);
   for (const row of relations) { ids.add(row.from); ids.add(row.to); }
-  const entities = [...direct, ...world.entities.filter(row => row.path !== task.path && ids.has(row.id))].slice(0, 24);
+  const directIds = new Set(direct.map(row => row.id));
+  const entities = [...direct, ...world.entities.filter(row => !directIds.has(row.id) && ids.has(row.id))].slice(0, 24);
   const keys = new Set(entities.map(row => row.key));
   const behaviors = world.behaviors.filter(row => keys.has(row.entity)).slice(0, 12);
   const subjects = new Set([...entities, ...relations, ...behaviors].map(row => row.id));

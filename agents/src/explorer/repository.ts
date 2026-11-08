@@ -84,12 +84,15 @@ export async function readRepositorySource(root: string, path: string) {
     || canonical.split('/').some(excludedName)) {
     throw new Error('The file resolves outside the allowed repository sources');
   }
+  if (!(await stat(absolute)).isFile()) throw new Error('Expected a file; this path is a directory or special entry');
   const file = await open(absolute, 'r');
   try {
     const info = await file.stat();
-    if (!info.isFile() || info.size > maxSourceBytes) throw new Error('Expected a text source file up to 512 KiB');
+    if (!info.isFile()) throw new Error('Expected a regular file');
+    if (info.size > maxSourceBytes) throw new Error('Source file exceeds 512 KiB');
     const bytes = await file.readFile();
-    if (bytes.length > maxSourceBytes || bytes.includes(0)) throw new Error('Expected a text source file up to 512 KiB');
+    if (bytes.length > maxSourceBytes) throw new Error('Source file exceeds 512 KiB');
+    if (bytes.includes(0)) throw new Error('Expected UTF-8 source; found a binary file');
     return { path: canonical, text: new TextDecoder('utf-8', { fatal: true }).decode(bytes).replaceAll('\r\n', '\n') };
   } finally {
     await file.close();

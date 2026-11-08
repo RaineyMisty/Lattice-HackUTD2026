@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
-import { AgentManager, CodexHarness, SpacetimeExplorationDatabase } from './index.ts';
+import { AgentManager, CodexHarness, printAgentActivity, SpacetimeExplorationDatabase } from './index.ts';
 import deployment from '../../spacetime_db/connection.json';
 
 function databaseToken() {
@@ -44,6 +44,7 @@ if (values.help || positionals.length !== 1) {
     }) : undefined;
     const manager = new AgentManager({
       database,
+      onActivity: printAgentActivity,
       harness: new CodexHarness({
         provider,
         apiKey: provider === 'openai' ? process.env.OPENAI_API_KEY : process.env.NVIDIA_API_KEY,

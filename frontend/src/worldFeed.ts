@@ -18,7 +18,7 @@ if (suppliedToken) {
 }
 
 export const simulationStorageKey = (id: string) => `${storageKey}:${id}:simulation`;
-export type AgentMessage = { message: string; at: number };
+export type AgentMessage = { id: string; message: string };
 export interface WorldSnapshot {
   world: RepositoryWorld;
   canSimulate: boolean;
@@ -26,7 +26,7 @@ export interface WorldSnapshot {
   relations: Relation[];
   states: EntityState[];
   simulations: Simulation[];
-  messages: AgentMessage[];
+  messages: AgentMessage[][];
 }
 
 export function useWorldFeed() {
@@ -51,7 +51,13 @@ export function useWorldFeed() {
         let currentWorldId = '';
         let previousTasks = new Map<string, Frontier>();
         const workers = new Map<string, number>();
-        const messages: AgentMessage[] = [];
+        const messages: AgentMessage[][] = Array.from({ length: 4 }, () => []);
+        const seen = new Set<string>();
+        function addMessage(worker: string, id: string, message: string) {
+          if (!workers.has(worker) && workers.size < messages.length) workers.set(worker, workers.size);
+          const slot = workers.get(worker);
+          if (slot !== undefined) messages[slot].push({ id, message });
+        }
 
         const read = () => {
           if (disposed || !applied) return;
@@ -68,31 +74,48 @@ export function useWorldFeed() {
             currentWorldId = world.id;
             previousTasks.clear();
             workers.clear();
-            messages.length = 0;
+            for (const queue of messages) queue.length = 0;
+            seen.clear();
           }
           const tasks = [...client.db.worldFrontier.iter()].filter(row => row.worldId === world.id);
           for (const task of tasks) {
-            if (!task.claimant || (task.status !== 'leased' && task.status !== 'done')) continue;
+            if (!task.claimant || task.status !== 'leased') continue;
             const old = previousTasks.get(task.id);
             if (old?.attempt === task.attempt && old.status === task.status) continue;
-            if (firstRead && task.status === 'done') continue;
             const worker = task.claimant.toHexString();
-            if (!workers.has(worker) && workers.size < 4) workers.set(worker, workers.size);
-            const slot = workers.get(worker);
-            if (slot !== undefined) {
-              const file = task.path.split('/').at(-1) || task.path;
-              messages[slot] = { message: task.status === 'leased' ? `Exploring ${file}…` : `Finished ${file}`, at: Date.now() };
-            }
+            const file = task.path.split('/').at(-1) || task.path;
+            addMessage(worker, `task:${task.id}:${task.attempt}`, `Exploring ${file}…`);
           }
           previousTasks = new Map(tasks.map(row => [row.id, row]));
+          const entities = [...client.db.worldEntities.iter()];
+          const relations = [...client.db.worldRelations.iter()];
+          const names = new Map(entities.map(row => [row.id, row.symbol || row.path.split('/').at(-1) || row.path]));
+          const rules = [...client.db.worldBehaviors.iter()];
+          const descriptions = new Map([
+            ...entities.map(row => [row.id, `Found ${row.kind} ${names.get(row.id)}`] as const),
+            ...relations.map(row => [row.id, `${names.get(row.from) ?? 'Source'} ${row.kind.replaceAll('_', ' ')} → ${names.get(row.to) ?? 'target'}`] as const),
+            ...rules.map(row => {
+              const effects = [...row.rule.set.map(action => `${action.key} = ${action.value}`), ...row.rule.emit.map(action => action.event)];
+              return [row.id, `Rule ${row.name} · ${row.rule.event} → ${effects.join(', ')}`] as const;
+            }),
+          ]);
+          const evidence = [...client.db.worldEvidence.iter()].sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+          for (const row of evidence) {
+            if (row.verdict !== 'supports') continue;
+            const author = row.author.toHexString();
+            const id = `discovery:${author}:${row.subjectId}`;
+            const description = descriptions.get(row.subjectId);
+            if (seen.has(id) || !description) continue;
+            seen.add(id);
+            if (!firstRead) addMessage(author, id, description);
+          }
           const role = [...client.db.myMemberships.iter()].find(row => row.worldId === world.id)?.role;
           setSnapshot({
             world, canSimulate: role === 'owner' || role === 'operator' || role === 'agent',
-            entities: [...client.db.worldEntities.iter()].filter(row => row.worldId === world.id),
-            relations: [...client.db.worldRelations.iter()].filter(row => row.worldId === world.id),
+            entities, relations,
             states: [...client.db.worldStates.iter()].filter(row => row.worldId === world.id),
             simulations: [...client.db.worldSimulations.iter()].filter(row => row.worldId === world.id),
-            messages: [...messages],
+            messages: messages.map(queue => [...queue]),
           });
           setConnection(client);
           setError('');
@@ -103,7 +126,8 @@ export function useWorldFeed() {
           queueMicrotask(() => { pending = false; read(); });
         };
         for (const table of [client.db.myWorlds, client.db.myMemberships, client.db.worldEntities,
-          client.db.worldRelations, client.db.worldStates, client.db.worldSimulations, client.db.worldFrontier]) {
+          client.db.worldRelations, client.db.worldBehaviors, client.db.worldEvidence,
+          client.db.worldStates, client.db.worldSimulations, client.db.worldFrontier]) {
           table.onInsert(changed);
           table.onUpdate(changed);
           table.onDelete(changed);

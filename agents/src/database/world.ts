@@ -158,9 +158,12 @@ export class SpacetimeExplorationDatabase implements ExplorationDatabase {
     const { client } = worker.connection;
     assertConnected(client);
     signal?.throwIfAborted();
-    const preferred = preferredId && this.run(scope.runId).preferred.get(preferredId);
+    const initial = this.run(scope.runId).preferred;
+    const preferred = preferredId && initial.get(preferredId);
+    const initialIds = new Set(initial.values());
     const queued = [...client.db.worldFrontier.iter()].filter(row => row.status === 'queued');
-    queued.sort((a, b) => Number(b.id === preferred) - Number(a.id === preferred) || a.attempt - b.attempt);
+    queued.sort((a, b) => Number(b.id === preferred) - Number(a.id === preferred)
+      || Number(initialIds.has(b.id)) - Number(initialIds.has(a.id)) || a.attempt - b.attempt);
     for (const task of queued) {
       signal?.throwIfAborted();
       try {

@@ -87,6 +87,7 @@ interface CodexEvent {
   message?: string;
   error?: { message?: string };
   item?: { type?: string; text?: string };
+  usage?: { input_tokens?: number; output_tokens?: number };
 }
 
 export class CodexHarness implements CodingHarness {
@@ -131,6 +132,8 @@ export class CodexHarness implements CodingHarness {
 
 async function runCodex(executable: string, args: string[], cwd: string, launch: CodexLaunch, turn: HarnessTurn) {
   turn.signal.throwIfAborted();
+  await turn.onActivity(`Launching Codex CLI${launch.model ? ` with ${launch.model}` : ''}`);
+  turn.signal.throwIfAborted();
   const child = spawn(executable, args, {
     cwd, windowsHide: true, signal: turn.signal,
     env: launch.env,
@@ -156,9 +159,16 @@ async function runCodex(executable: string, args: string[], cwd: string, launch:
       if (!line.trim()) continue;
       const event = JSON.parse(line) as CodexEvent;
       if (event.type === 'thread.started') threadId = event.thread_id;
+      if (event.type === 'turn.started') await turn.onActivity('Codex turn started; waiting for provider output');
       if (event.type === 'turn.failed') failure = event.error?.message || 'Codex turn failed';
       if (event.type === 'error') failure ??= event.message;
-      if (event.type === 'turn.completed') completed = true;
+      if (event.type === 'turn.completed') {
+        completed = true;
+        const { input_tokens: input, output_tokens: output } = event.usage ?? {};
+        await turn.onActivity(typeof input === 'number' && typeof output === 'number'
+          ? `Codex turn completed (${input} input, ${output} output tokens reported)`
+          : 'Codex turn completed');
+      }
       if (event.type === 'item.started' && event.item?.type === 'command_execution') {
         await turn.onActivity('Inspecting repository with a shell tool');
       }

@@ -5,4 +5,5 @@ export type { CodingHarness, CodexHarnessOptions, CodexProvider, HarnessSession,
 export { MemoryExplorationDatabase } from './database/client.ts';
 export { SpacetimeExplorationDatabase } from './database/world.ts';
 export type { SpacetimeExplorationOptions } from './database/world.ts';
+export { printAgentActivity } from './diagnostics.ts';
 export type * from './database/interface.ts';

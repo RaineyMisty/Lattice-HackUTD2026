@@ -6,6 +6,6 @@
     "allowImportingTsExtensions": true, "resolveJsonModule": true,
     "skipLibCheck": true, "types": ["node", "vite/client"]
   },
-  "include": ["frontend", "agents", "db", "shared"],
+  "include": ["frontend", "agents", "scripts", "db", "shared"],
   "exclude": ["node_modules", "frontend/dist", "db/dist"]
 }
