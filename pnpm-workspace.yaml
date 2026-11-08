@@ -1,5 +1,6 @@
 packages:
   - frontend
   - db
+  - agents
 allowBuilds:
   esbuild: true

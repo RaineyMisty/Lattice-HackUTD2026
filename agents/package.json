@@ -1,0 +1,19 @@
+{
+  "name": "@lattice/agents",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "exports": "./src/index.ts",
+  "scripts": {
+    "explore": "tsx src/explore-cli.ts",
+    "test": "tsx --test src/explorer.test.ts"
+  },
+  "dependencies": {
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "tsx": "^4.20.0"
+  }
+}

@@ -10,7 +10,7 @@ const commands = [
   ...(!process.argv.includes('--database-only') ? [[
     '--import', 'tsx', '--test',
     'db/src/domain/domain.test.ts',
-    'agents/src/runner.test.ts',
+    'agents/src/explorer.test.ts',
   ]] : []),
   ['node_modules/vitest/vitest.mjs', 'run', '--config', 'db/vitest.config.ts'],
 ];
