@@ -1,0 +1,11 @@
+{
+  "maincloud": {
+    "uri": "https://maincloud.spacetimedb.com",
+    "database": "lattice-living-world-6b9d31f7",
+    "identity": "c200c5b86c23a3a270ad0bb8af298e723076ba2e70cfdd45226722037a5d1cc8"
+  },
+  "local": {
+    "uri": "http://127.0.0.1:3380",
+    "database": "lattice-world-local"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "name": "@lattice/repository-world",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "exports": { ".": "./client/index.ts", "./bindings": "./bindings/index.ts" },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test:live": "tsx --test test/live.test.ts"
+  },
+  "dependencies": { "spacetimedb": "2.14.1" },
+  "devDependencies": { "@types/node": "^24.0.0", "tsx": "4.20.6", "typescript": "5.9.3" }
+}
