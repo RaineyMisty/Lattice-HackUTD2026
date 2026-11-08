@@ -9,7 +9,6 @@ export interface Placement extends Point {
   radius: number;
   collision: number;
   labels: string[];
-  color: string;
 }
 interface Particle extends Placement, SimulationNodeDatum {
   x: number;
@@ -22,7 +21,6 @@ interface Spring extends SimulationLinkDatum<Particle> {
   target: Particle;
 }
 
-const palette = ['#8cd9ff', '#c4a5ff', '#8ee5ca', '#f0bc89', '#a6b7ff', '#f4a5db', '#a8deb2'];
 const goldenAngle = Math.PI * (3 - Math.sqrt(5));
 
 function hash(value: string) {
@@ -112,8 +110,8 @@ export function createForceLayout(render: (nodes: Placement[]) => void, reducedM
   const spring = forceLink<Particle, Spring>()
     .distance(({ source, target }) => source.radius + target.radius + (source.group === target.group ? 52 : 92))
     .strength(({ source, target }) => source.group === target.group ? .20 : .075);
-  const publish = () => render([...particles.values()].map(({ id, x, y, radius, collision, labels, color }) =>
-    ({ id, x, y, radius, collision, labels, color })));
+  const publish = () => render([...particles.values()].map(({ id, x, y, radius, collision, labels }) =>
+    ({ id, x, y, radius, collision, labels })));
   const simulation = forceSimulation<Particle>().stop()
     .alphaMin(.009).alphaDecay(.065).velocityDecay(.43)
     .force('links', spring)
@@ -165,7 +163,7 @@ export function createForceLayout(render: (nodes: Placement[]) => void, reducedM
         const labelWidth = Math.max(0, ...labels.map(label => label.length * 3.4));
         const collision = Math.max(radius + 10, labelWidth + 7, radius + 7 + labels.length * 12);
         return [node.id, {
-          ...previous, id: node.id, radius, labels, collision, group, anchor, color: palette[hash(group) % palette.length],
+          ...previous, id: node.id, radius, labels, collision, group, anchor,
           x: previous?.x ?? base.x + Math.cos(angle) * 48, y: previous?.y ?? base.y + Math.sin(angle) * 48,
         }];
       }));

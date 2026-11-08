@@ -203,7 +203,7 @@ export default function SystemMap({ graph, presentation, selectedNodeId, onSelec
               return (
                 <g key={node.id} className={`map-node kind-${node.kind} tone-${style?.tone ?? 'neutral'}${style?.pulse ? ' pulsing' : ''}${isSelected ? ' selected' : ''}${style?.muted ? ' dimmed' : ''}`}
                   data-map-node={node.id} data-kind={node.kind} transform={`translate(${point.x} ${point.y})`}
-                  style={{ '--cluster-color': point.color, '--impact-delay': `${style?.delayMs ?? 0}ms` } as CSSProperties}
+                  style={{ '--impact-delay': `${style?.delayMs ?? 0}ms` } as CSSProperties}
                   role={onSelectNode ? 'button' : 'img'} tabIndex={onSelectNode ? 0 : undefined}
                   aria-label={status ? `${node.label}, ${status}` : node.label} aria-pressed={onSelectNode ? isSelected : undefined}
                   onClick={() => { if (!suppressClick.current) onSelectNode?.(node.id); }}

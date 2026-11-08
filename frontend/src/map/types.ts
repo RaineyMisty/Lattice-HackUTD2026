@@ -1,4 +1,4 @@
-export type NodeKind = 'service' | 'component' | 'module' | 'file' | 'function' | 'container' | 'config' | 'data' | 'queue' | 'gateway';
+export type NodeKind = 'service' | 'component' | 'module' | 'file' | 'function' | 'class' | 'resource' | 'container' | 'config' | 'data' | 'queue' | 'gateway';
 export type MapTone = 'neutral' | 'warning' | 'caution' | 'positive';
 
 export interface MapNode {

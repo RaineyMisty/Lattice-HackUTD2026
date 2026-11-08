@@ -30,20 +30,27 @@
   pointer-events: none;
   transition: stroke 240ms, opacity 240ms;
 }
-.map-edge.tone-caution { stroke: #ffd28a; opacity: .85; animation: map-edge-impact 250ms ease-out backwards; }
+.map-edge.tone-caution { stroke: #ff6d86; opacity: .85; animation: map-edge-impact 250ms ease-out backwards; }
 .map-edge.tone-positive { stroke: #8eebc0; }
 .map-edge.tone-warning { stroke: #ff8a9e; }
 .map-edge.highlighted { stroke-width: 2.05; opacity: 1; }
 .map-edge.dimmed { opacity: .08; }
 
 .map-node {
-  --node-color: var(--cluster-color, #b4c6ff);
+  --type-color: #b4c6ff;
+  --node-color: var(--type-color);
   cursor: grab;
   transition: opacity 180ms;
 }
+.map-node.kind-service { --type-color: #ffe16c; }
+.map-node.kind-module { --type-color: #bb9bff; }
+.map-node.kind-file { --type-color: #86b3ff; }
+.map-node.kind-class { --type-color: #8bdf9c; }
+.map-node.kind-function { --type-color: #73e2ef; }
+.map-node.kind-resource { --type-color: #ebacd8; }
 .map-node.dimmed { opacity: .29; }
 .map-node.tone-warning { --node-color: #ff879d; }
-.map-node.tone-caution { --node-color: #ffcc7e; }
+.map-node.tone-caution { --node-color: #ff5e79; }
 .map-node.tone-positive { --node-color: #86ebc0; }
 .map-halo {
   fill: color-mix(in srgb, var(--node-color) 12%, transparent);
@@ -78,7 +85,7 @@
   fill: #8c334e;
   stroke-width: 2.5;
 }
-.map-node.tone-caution .map-bubble { animation: map-bubble-impact 250ms ease-out var(--impact-delay, 0ms) backwards; }
+.map-node.tone-caution .map-bubble { animation: map-bubble-impact 1.25s ease-in-out var(--impact-delay, 0ms) infinite; }
 .map-node.pulsing .map-halo { animation: map-warning 1.35s ease-out 3; }
 
 .map-node-info {
@@ -108,7 +115,8 @@
   from { stroke: #b5b5ef; opacity: .32; }
 }
 @keyframes map-bubble-impact {
-  from { fill: color-mix(in srgb, var(--cluster-color) 43%, #242346); stroke: var(--cluster-color); }
+  0%, 100% { fill: color-mix(in srgb, var(--node-color) 36%, #242346); }
+  50% { fill: color-mix(in srgb, var(--node-color) 78%, #242346); }
 }
 @media (prefers-reduced-motion: reduce) {
   .map-pan, .map-edge, .map-node, .map-bubble, .map-halo { transition: none; }

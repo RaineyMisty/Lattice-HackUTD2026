@@ -2,7 +2,7 @@ import type { Entity, EntityState, Relation } from '../../spacetime_db/client';
 import type { LinkAppearance, MapGraph, MapPresentation, NodeAppearance, NodeKind } from './map/types';
 
 const kinds: Record<string, NodeKind> = {
-  service: 'service', module: 'module', file: 'file', function: 'function', class: 'component', resource: 'data',
+  service: 'service', module: 'module', file: 'file', function: 'function', class: 'class', resource: 'resource',
 };
 
 export function buildRepositoryGraph(entities: Entity[] = [], relations: Relation[] = []): MapGraph {
