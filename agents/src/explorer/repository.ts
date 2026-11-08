@@ -1,4 +1,6 @@
 import { createHash } from 'node:crypto';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { open, readdir, realpath, stat } from 'node:fs/promises';
 import { basename, extname, isAbsolute, join, relative, resolve } from 'node:path';
 
@@ -22,6 +24,34 @@ export async function repositoryRoot(path: string) {
   const root = await realpath(resolve(path));
   if (!(await stat(root)).isDirectory()) throw new Error('The repository path must be a directory');
   return root;
+}
+
+const exec = promisify(execFile);
+async function git(root: string, args: string[], maxBuffer = 16 * 1024 * 1024, signal?: AbortSignal) {
+  const { stdout } = await exec('git', ['-C', root, ...args], {
+    encoding: 'buffer', maxBuffer, signal, windowsHide: true,
+    env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' },
+  });
+  return stdout;
+}
+
+export async function repositoryRevision(root: string) {
+  const top = (await git(root, ['rev-parse', '--show-toplevel'])).toString('utf8').trim();
+  if (await realpath(top) !== root) throw new Error('Pass the root of the Git repository for a live world');
+  const commit = (await git(root, ['rev-parse', '--verify', 'HEAD^{commit}'])).toString('ascii').trim();
+  if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(commit)) throw new Error('Expected a Git commit SHA');
+  const changes = await git(root, ['status', '--porcelain', '--untracked-files=no']);
+  if (changes.length) throw new Error('The tracked working tree must match the Git commit before exploring');
+  const tracked = (await git(root, ['ls-tree', '-r', '--name-only', '-z', commit])).toString('utf8').split('\0');
+  return { commit, tracked: new Set(tracked) };
+}
+
+export async function readRevisionSource(root: string, commit: string, path: string, signal?: AbortSignal) {
+  const source = await readRepositorySource(root, path);
+  const bytes = await git(root, ['cat-file', 'blob', `${commit}:${source.path}`], maxSourceBytes, signal);
+  const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes).replaceAll('\r\n', '\n');
+  if (text !== source.text) throw new Error(`Working file differs from the selected Git commit: ${source.path}`);
+  return source;
 }
 
 export async function indexSources(root: string, limit = 4096) {

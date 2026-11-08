@@ -19,6 +19,16 @@ const turnSchema = z.strictObject({
 export const turnOutputSchema = z.toJSONSchema(turnSchema, { target: 'draft-7' });
 const nodeId = ({ kind, path, name }: NodeRef) => stableId('node', kind, path, name);
 
+export function matchQuote(text: string, startLine: number, endLine: number, quote: string) {
+  const lines = text.split('\n');
+  const excerpt = quote.replaceAll('\r\n', '\n');
+  if (endLine < startLine || endLine - startLine > 39 || endLine > lines.length || !excerpt.trim()
+    || !lines.slice(startLine - 1, endLine).join('\n').includes(excerpt)) {
+    throw new Error('Quoted text does not match the cited source lines');
+  }
+  return excerpt;
+}
+
 export async function verifyTurn(root: string, response: string, agentId: string, signal: AbortSignal) {
   signal.throwIfAborted();
   const turn = turnSchema.parse(JSON.parse(response));
@@ -39,13 +49,8 @@ export async function verifyTurn(root: string, response: string, agentId: string
   }
   async function checkEvidence(input: z.infer<typeof citation>): Promise<SourceEvidence> {
     const source = await read(input.path);
-    const lines = source.text.split('\n');
     const { startLine, endLine } = input;
-    const quote = input.quote.replaceAll('\r\n', '\n');
-    if (endLine < startLine || endLine - startLine > 39 || endLine > lines.length || !quote.trim()
-      || !lines.slice(startLine - 1, endLine).join('\n').includes(quote)) {
-      throw new Error('Quoted text does not match the cited source lines');
-    }
+    const quote = matchQuote(source.text, startLine, endLine, input.quote);
     return {
       id: stableId('evidence', source.path, startLine, endLine, quote),
       path: source.path, startLine, endLine, quote, verification: 'source-matched',

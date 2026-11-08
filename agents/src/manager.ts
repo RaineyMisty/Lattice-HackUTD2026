@@ -5,7 +5,7 @@ import type { AgentStatus, ExplorationDatabase, ExplorationTask, RunIdentity } f
 import { runExplorer } from './explorer/explorer.ts';
 import { CodexHarness } from './explorer/harness.ts';
 import type { CodingHarness } from './explorer/harness.ts';
-import { indexSources, repositoryRoot, stableId } from './explorer/repository.ts';
+import { indexSources, repositoryRevision, repositoryRoot, stableId } from './explorer/repository.ts';
 
 export interface StartExploration {
   repositoryPath: string;
@@ -77,18 +77,20 @@ export class AgentManager {
   async start(options: StartExploration): Promise<ExplorationHandle> {
     const agentCount = integer(options.agentCount ?? 4, 'agentCount', 1, 32);
     const seed = integer(options.seed ?? randomBytes(4).readUInt32LE(), 'seed', 0, 0xffffffff);
-    const maxTurns = integer(options.maxTurnsPerAgent ?? 4, 'maxTurnsPerAgent', 1, 32);
+    const stayOpen = !!this.database.commitBound && options.maxTurnsPerAgent === undefined;
+    const maxTurns = stayOpen ? Infinity : integer(options.maxTurnsPerAgent ?? 4, 'maxTurnsPerAgent', 1, 32);
     const turnTimeoutMs = integer(options.turnTimeoutMs ?? 180_000, 'turnTimeoutMs', 1, 1_200_000);
     const root = await repositoryRoot(options.repositoryPath);
-    const [indexed, skill] = await Promise.all([
+    const [indexed, skill, revision] = await Promise.all([
       indexSources(root),
       readFile(new URL('./explorer/SKILL.md', import.meta.url), 'utf8'),
+      this.database.commitBound ? repositoryRevision(root) : undefined,
     ]);
-    if (!indexed.length) throw new Error('The repository has no supported source files to explore');
-    const files = shuffled(indexed, seed);
+    const files = shuffled(revision ? indexed.filter(file => revision.tracked.has(file) && file.length <= 768) : indexed, seed);
+    if (!files.length) throw new Error('The repository has no supported source files to explore');
     const runId = randomUUID();
     const startedAt = new Date().toISOString();
-    const run: RunIdentity = { id: runId, repositoryPath: root, seed };
+    const run: RunIdentity = { id: runId, repositoryPath: root, seed, commit: revision?.commit };
     const agents: AgentStatus[] = [];
     const tasks: ExplorationTask[] = [];
     for (let index = 0; index < agentCount; index++) {
@@ -100,19 +102,21 @@ export class AgentManager {
       });
       tasks.push({
         id: stableId('initial', id, startPath), path: startPath,
-        question: lenses[(index + seed % lenses.length) % lenses.length],
+        question: revision ? 'Find definitions, dependencies, and executable behavior supported by this source.'
+          : lenses[(index + seed % lenses.length) % lenses.length],
       });
     }
-    await this.database.initializeRun(run, tasks);
+    await this.database.initializeRun(run, tasks, agents);
     const abort = new AbortController();
     const status: RunStatus = { ...run, startedAt, phase: 'running', agents };
     const workers = agents.map((agent, index) => runExplorer({
       scope: { runId, agentId: agent.id, sessionId: agent.sessionId },
       initialStatus: agent, initialTaskId: tasks[index].id, repositoryPath: root, skill,
-      harness: this.harness, database: this.database, signal: abort.signal, maxTurns, turnTimeoutMs,
+      harness: this.harness, database: this.database, signal: abort.signal, maxTurns, turnTimeoutMs, stayOpen, commit: revision?.commit,
       onStatus: latest => { status.agents[index] = latest; },
     }));
-    const done = Promise.all(workers).then(results => {
+    const done = Promise.all(workers).then(async results => {
+      await this.database.closeRun?.(runId);
       status.phase = results.some(result => result.phase === 'failed') ? 'failed' : abort.signal.aborted ? 'stopped' : 'completed';
       status.finishedAt = new Date().toISOString();
       return structuredClone(status);

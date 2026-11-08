@@ -42,12 +42,20 @@ The default adapter is in memory. `maxTurnsPerAgent` and `turnTimeoutMs` bound e
 
 ## Connect SpacetimeDB
 
-Pass `new SpacetimeExplorationDatabase(bindings)` as the manager's `database`. The binding contract in `src/database/client.ts` exposes:
+Install the generated SDK's dependencies with `npm.cmd --prefix spacetime_db ci`. Start and publish the local module as shown in the root README. Use a clean Git checkout and the same CLI identity that owns the database.
 
-- A read view scoped by run for nodes, edges, evidence, tasks, status, and activity.
-- Atomic task claims scoped by run, Agent, and session.
-- Reducers to initialize a run, commit an idempotent discovery batch and complete its claim, release or fail a claim, and write status and logs.
+```powershell
+node --import tsx agents/src/explore-cli.ts ".\repo\train-ticket" --world train-ticket --create-world --provider nvidia --agents 4 --turns 2
+```
 
-Keep the run ID in all table keys or indexes. Enforce claim ownership at commit, and use a lease for abandoned remote claims. An edge can arrive before its endpoint nodes from a different worker, so the database can hold it until both endpoints exist. Bind the claim call to a procedure or to a reducer plus its correlated subscription result. Existing TokenGate tables are separate from this exploration schema.
+`--create-world` creates a missing world using the local checkout's actual commit. Omit it to require an existing world. The checkout must match the world's commit. Use a new world ID for a new revision. The default destination is the local database in `spacetime_db/connection.json`. `--maincloud` selects the deployed Maincloud database. `--db-url` and `--database` can override either endpoint explicitly.
 
-`CodingHarness` is also injectable. The tests use a local harness fixture to exercise parallel tasks, evidence validation, and cancellation without a model request.
+The owner authorizes a separate database identity for each Explorer. To run an already authorized Agent identity, set `LATTICE_STDB_TOKEN` and use `--agents 1`. The token is used by the database adapter. Without that variable the CLI reads its saved SpacetimeDB login. Configure your model provider independently.
+
+The first run enqueues tracked source files if Frontier is empty. Each Explorer waits for subscription updates, claims a task through a reducer, reads current shared knowledge and the pinned source, then submits its verified entities, relations, executable behaviors, citations and follow-up tasks. The submission completes the claimed attempt in the same transaction. Failed or interrupted turns leave their lease for the database scheduler to retry. With `--turns`, each worker exits at its turn budget or when shared work drains. Without it, live workers wait for new tasks until Ctrl+C.
+
+For SDK callers, pass `new SpacetimeExplorationDatabase({ uri, database, worldId, token })` to `AgentManager`. The live graph is in `(await manager.getContext(run.id)).world`. Calls without `--world` retain the standalone in-memory mode.
+
+## Verify the live loop
+
+Publish the module as `lattice-agent-loop-test` to an isolated local instance on port 3381, supply its publisher token via `LATTICE_STDB_TEST_TOKEN`, and run `node --import tsx --test agents/src/world.test.ts`. This test uses a temporary Git repository and a scripted Harness, and exercises a real SpacetimeDB server without making model requests.

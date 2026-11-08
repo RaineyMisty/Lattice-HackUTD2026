@@ -102,22 +102,3 @@ export class MemoryExplorationDatabase implements ExplorationDatabase {
     }
   }
 }
-
-/** Bind these operations to generated client views and reducers once the exploration schema exists. */
-export interface SpacetimeExplorationBindings {
-  readContext: ExplorationDatabase['readContext'];
-  /** Implement with an atomic claim reducer and its correlated result, or a transactional procedure. */
-  claimTask: ExplorationDatabase['claimTask'];
-  reducers: Pick<ExplorationDatabase, 'initializeRun' | 'commitDiscovery' | 'settleTask' | 'writeStatus' | 'appendActivity'>;
-}
-
-export class SpacetimeExplorationDatabase implements ExplorationDatabase {
-  constructor(private readonly bindings: SpacetimeExplorationBindings) {}
-  initializeRun(...args: Parameters<ExplorationDatabase['initializeRun']>) { return this.bindings.reducers.initializeRun(...args); }
-  readContext(...args: Parameters<ExplorationDatabase['readContext']>) { return this.bindings.readContext(...args); }
-  claimTask(...args: Parameters<ExplorationDatabase['claimTask']>) { return this.bindings.claimTask(...args); }
-  commitDiscovery(...args: Parameters<ExplorationDatabase['commitDiscovery']>) { return this.bindings.reducers.commitDiscovery(...args); }
-  settleTask(...args: Parameters<ExplorationDatabase['settleTask']>) { return this.bindings.reducers.settleTask(...args); }
-  writeStatus(...args: Parameters<ExplorationDatabase['writeStatus']>) { return this.bindings.reducers.writeStatus(...args); }
-  appendActivity(...args: Parameters<ExplorationDatabase['appendActivity']>) { return this.bindings.reducers.appendActivity(...args); }
-}

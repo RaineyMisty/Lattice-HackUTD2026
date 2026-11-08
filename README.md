@@ -12,11 +12,22 @@ Start SpacetimeDB in a separate terminal.
 spacetime start --listen-addr 127.0.0.1:3380 --data-dir .data/living-world
 ```
 
-Publish with your CLI identity if the module is new. Create a world with the actual repository and commit through the database API, then pass its ID to the local setup. Setup grants a browser operator identity access to that existing world.
+Publish with your CLI identity if the module is new.
 
 ```powershell
 spacetime publish lattice-world-local --server http://127.0.0.1:3380 --module-path spacetime_db
-$env:LATTICE_WORLD_ID = '<existing-world-id>'
+```
+
+In an Agent terminal with `NVIDIA_API_KEY` set, explore a clean local Git checkout. The first run creates a world at the actual commit. The example limits each Explorer to two turns.
+
+```powershell
+node --import tsx agents/src/explore-cli.ts ".\repo\train-ticket" --world train-ticket --create-world --provider nvidia --agents 4 --turns 2
+```
+
+Once the Agent CLI prints the running status, configure browser access in a frontend terminal.
+
+```powershell
+$env:LATTICE_WORLD_ID = 'train-ticket'
 npm.cmd run setup:local
 npm.cmd run dev
 ```
@@ -31,4 +42,4 @@ Without local setup, Vite uses the Maincloud deployment from `spacetime_db/conne
 
 The publisher creates the world and uses `setMember` to grant the browser identity reader or operator access. When access is required, the page logs the browser identity to the developer console. The map starts empty and draws the selected world's subscribed entities and relations as they arrive.
 
-The standalone Agent CLI currently keeps its exploration output in memory. The frontend displays Agent activity once an external worker claims tasks in this database. See `spacetime_db/README.md` for the Agent and database APIs.
+The Agent CLI subscribes and writes to SpacetimeDB when given `--world`. Without that option it runs an in-memory exploration. See [Agent usage](agents/README.md) for connection options and [database APIs](spacetime_db/README.md) for simulation and permissions.

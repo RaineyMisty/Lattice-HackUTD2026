@@ -47,16 +47,19 @@ interface CodexLaunch {
 }
 
 function configureProvider(options: CodexHarnessOptions): CodexLaunch {
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  delete env.LATTICE_STDB_TOKEN;
   if (options.provider !== 'nvidia') {
+    if (options.apiKey) env.CODEX_API_KEY = options.apiKey;
     return {
       config: [], model: options.model, apiKey: options.apiKey,
-      env: options.apiKey ? { ...process.env, CODEX_API_KEY: options.apiKey } : process.env,
+      env,
     };
   }
   const apiKey = (options.apiKey ?? process.env.NVIDIA_API_KEY)?.trim();
   if (!apiKey) throw new Error('NVIDIA_API_KEY is required when using --provider nvidia');
 
-  const env: NodeJS.ProcessEnv = { ...process.env, NVIDIA_API_KEY: apiKey };
+  env.NVIDIA_API_KEY = apiKey;
   delete env.CODEX_API_KEY;
   delete env.OPENAI_API_KEY;
   delete env.OPENAI_BASE_URL;

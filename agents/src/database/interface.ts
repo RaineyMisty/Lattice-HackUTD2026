@@ -1,3 +1,5 @@
+import type { Behavior, BehaviorInput, Entity, EntityInput, Evidence, Frontier, Relation, RelationInput, TaskInput } from '../../../spacetime_db/client/index.ts';
+
 export const nodeKinds = ['service', 'module', 'file', 'symbol', 'container', 'config', 'package'] as const;
 export const relationshipKinds = ['contains', 'defines', 'imports', 'calls', 'depends-on', 'communicates-with', 'deploys', 'configures'] as const;
 export type NodeKind = typeof nodeKinds[number];
@@ -64,7 +66,7 @@ export interface ActivityRecord {
   taskId?: string;
 }
 
-export interface RunIdentity { id: string; repositoryPath: string; seed: number }
+export interface RunIdentity { id: string; repositoryPath: string; seed: number; commit?: string }
 export interface AgentScope { runId: string; agentId: string; sessionId: string }
 
 export interface ExplorationContext {
@@ -74,6 +76,22 @@ export interface ExplorationContext {
   tasks: TaskRecord[];
   agents: AgentStatus[];
   activity: ActivityRecord[];
+  world?: WorldKnowledge;
+}
+
+export interface WorldKnowledge {
+  entities: Entity[];
+  relations: Relation[];
+  behaviors: Behavior[];
+  evidence: Evidence[];
+  frontier: Frontier[];
+}
+
+export interface WorldUpdate {
+  entities: EntityInput[];
+  relations: RelationInput[];
+  behaviors: BehaviorInput[];
+  tasks: TaskInput[];
 }
 
 export interface DiscoveryBatch {
@@ -81,6 +99,7 @@ export interface DiscoveryBatch {
   edges: DiscoveryEdge[];
   evidence: SourceEvidence[];
   tasks: ExplorationTask[];
+  world?: WorldUpdate;
 }
 
 export interface TaskClaim {
@@ -89,13 +108,17 @@ export interface TaskClaim {
 }
 
 export interface ExplorationDatabase {
-  initializeRun(run: RunIdentity, tasks: readonly ExplorationTask[]): Promise<void>;
-  readContext(runId: string, limit?: number, signal?: AbortSignal): Promise<ExplorationContext>;
-  /** Claim and count in-flight work atomically. A claim belongs to one agent session. */
-  claimTask(scope: AgentScope, preferredId?: string, signal?: AbortSignal): Promise<TaskClaim>;
+  readonly commitBound?: boolean;
+  initializeRun(run: RunIdentity, tasks: readonly ExplorationTask[], agents?: readonly AgentStatus[]): Promise<void>;
+  readContext(runId: string, limit?: number, signal?: AbortSignal, scope?: AgentScope): Promise<ExplorationContext>;
+  /** Claim atomically and report the currently observed in-flight work. */
+  claimTask(scope: AgentScope, preferredId?: string, signal?: AbortSignal, leaseMs?: number): Promise<TaskClaim>;
   /** Save all findings and complete the claim atomically. A retry must not duplicate records. */
   commitDiscovery(scope: AgentScope, taskId: string, batch: DiscoveryBatch, signal?: AbortSignal): Promise<void>;
   settleTask(scope: AgentScope, taskId: string, outcome: 'release' | 'failed'): Promise<void>;
   writeStatus(scope: AgentScope, status: AgentStatus): Promise<void>;
   appendActivity(scope: AgentScope, activity: ActivityRecord): Promise<void>;
+  waitForWork?(scope: AgentScope, stayOpen: boolean, signal: AbortSignal): Promise<void>;
+  closeRun?(runId: string): Promise<void>;
 }
+
