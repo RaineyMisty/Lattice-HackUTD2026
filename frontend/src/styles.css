@@ -49,7 +49,24 @@ button:disabled { cursor: default; }
 }
 .brand b { font-size: 20px; letter-spacing: .12em; }
 .incident-heading { text-align: center; min-width: 0; }
-.incident-heading h1 { font-size: clamp(15px, 2.1vw, 28px); line-height: 1.1; letter-spacing: -.035em; }
+.repo-picker { position: relative; display: inline-flex; align-items: center; max-width: 100%; }
+.repo-picker select {
+  appearance: none;
+  max-width: 100%;
+  padding: 5px 27px 5px 5px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #f1efff;
+  font: 720 clamp(15px, 2.1vw, 28px) "Segoe UI", system-ui, sans-serif;
+  letter-spacing: -.035em;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+.repo-picker select:focus-visible { outline: 2px solid #a7a1e8; }
+.repo-picker select:disabled { cursor: default; }
+.repo-picker option { background: #2b284d; }
+.repo-picker svg { position: absolute; right: 4px; color: #c8b9fa; pointer-events: none; }
 .controls { position: relative; justify-content: end; }
 .controls button {
   display: inline-flex;
@@ -82,6 +99,7 @@ button:disabled { cursor: default; }
   color: #d6baff;
 }
 .bug-button[aria-pressed="true"] svg { visibility: hidden; }
+.controls .wrench-button { color: #a5e8cc; }
 .bug-cursor {
   position: fixed;
   z-index: 5;
@@ -92,6 +110,7 @@ button:disabled { cursor: default; }
   filter: drop-shadow(0 0 6px #ff6d8bba);
   pointer-events: none;
 }
+.repair-cursor { color: #a5e8cc; filter: drop-shadow(0 0 6px #72ddb8a0); }
 .is-placing-bug .map,
 .is-placing-bug .map-node { cursor: none; }
 .action-error {
@@ -266,7 +285,6 @@ button:disabled { cursor: default; }
   .brand-mark svg { width: 18px; }
   .brand b { font-size: 14px; }
   .incident-heading { grid-area: 2 / 1 / 3 / 3; text-align: left; }
-  .incident-heading h1 { margin: 2px 0; }
   .controls button { min-height: 31px; min-width: 68px; padding: 0 7px; font-size: .72rem; }
   .arena {
     --avatar-card-size: clamp(66px, 12vh, 93px);

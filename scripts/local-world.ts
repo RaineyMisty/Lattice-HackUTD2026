@@ -38,10 +38,12 @@ export function connectDatabase(config: WorldConnectionConfig) {
   });
 }
 
-export async function grantOperator(owner: DbConnection, config: WorldConnectionConfig, worldId: string) {
+export async function grantOperator(owner: DbConnection, config: WorldConnectionConfig, worldIds: string | readonly string[]) {
   const { client, token } = await connectDatabase(config);
   try {
-    await owner.reducers.setMember({ worldId, identity: client.identity!, role: 'operator' });
+    for (const worldId of typeof worldIds === 'string' ? [worldIds] : worldIds) {
+      await owner.reducers.setMember({ worldId, identity: client.identity!, role: 'operator' });
+    }
     return token;
   } finally {
     client.disconnect();

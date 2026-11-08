@@ -8,7 +8,9 @@ const MAX_EVENTS = 2048;
 const MAX_DEPTH = 24;
 const simulationRoles = ['owner', 'agent', 'operator'];
 type Simulation = Infer<typeof simulation.rowType>;
-type Event = Pick<Infer<typeof eventJob.rowType>, 'simulationId' | 'entity' | 'event' | 'depth' | 'attempt'>;
+type Event = Pick<Infer<typeof eventJob.rowType>, 'simulationId' | 'entity' | 'event' | 'depth' | 'attempt'>
+  & { faultOrigin?: string };
+const impactKey = (entity: string) => `lattice.impact:${entity}`;
 
 function runningSimulation(ctx: Ctx, id: string) {
   const simulation = ctx.db.simulation.id.find(id);
@@ -25,10 +27,19 @@ function enqueue(ctx: Ctx, event: Event, delayMs: number) {
     return;
   }
   ctx.db.simulation.id.update({ ...simulation, queued: simulation.queued + 1 });
-  ctx.db.eventJob.insert({
-    ...event, scheduledId: 0n,
+  const { faultOrigin, ...args } = event;
+  const job = ctx.db.eventJob.insert({
+    ...args, scheduledId: 0n,
     scheduledAt: ScheduleAt.time(ctx.timestamp.microsSinceUnixEpoch + BigInt(Math.max(1, delayMs)) * 1000n),
   });
+  if (faultOrigin) {
+    ctx.db.faultEvent.insert({ scheduledId: job.scheduledId, faultId: keyOf(simulation.id, faultOrigin), origin: faultOrigin });
+  }
+}
+
+function cancelJob(ctx: Ctx, scheduledId: bigint) {
+  ctx.db.eventJob.scheduledId.delete(scheduledId);
+  ctx.db.faultEvent.scheduledId.delete(scheduledId);
 }
 
 function putState(ctx: Ctx, simulation: Simulation, entity: string, key: string, value: string) {
@@ -51,7 +62,7 @@ export const createSimulation = db.reducer({ worldId: t.string(), id: t.string()
 export const stopSimulation = db.reducer({ id: t.string() }, (ctx, { id }) => {
   const simulation = runningSimulation(ctx, id);
   ctx.db.simulation.id.update({ ...simulation, status: 'stopped' });
-  for (const job of [...ctx.db.eventJob.simulationId.filter(id)]) ctx.db.eventJob.scheduledId.delete(job.scheduledId);
+  for (const job of [...ctx.db.eventJob.simulationId.filter(id)]) cancelJob(ctx, job.scheduledId);
 });
 
 export const requestEvent = db.reducer({
@@ -66,7 +77,7 @@ export const requestEvent = db.reducer({
 export const setBug = db.reducer({ simulationId: t.string(), entity: t.string() }, (ctx, { simulationId, entity }) => {
   const simulation = runningSimulation(ctx, simulationId);
   const origin = activeEntity(ctx, simulation.worldId, entity);
-  const stateKey = `lattice.impact:${entity}`;
+  const stateKey = impactKey(entity);
   if (ctx.db.state.id.find(keyOf(simulationId, entity, stateKey))) return;
 
   type Hop = { key: string; id: string; level: number; via?: string; relation?: string };
@@ -94,14 +105,28 @@ export const setBug = db.reducer({ simulationId: t.string(), entity: t.string() 
       origin: entity, level: hit.level, status: hit.level === 0 ? 'fault_origin' : 'potential_impact',
       via: hit.via, relation: hit.relation,
     }));
-    enqueue(ctx, { simulationId, entity: hit.key, event, depth: 0, attempt: 1 }, 0);
+    enqueue(ctx, { simulationId, entity: hit.key, event, depth: 0, attempt: 1, faultOrigin: entity }, 0);
   }
+});
+
+export const clearBug = db.reducer({ simulationId: t.string(), entity: t.string() }, (ctx, { simulationId, entity }) => {
+  runningSimulation(ctx, simulationId);
+  const key = impactKey(entity);
+  if (!ctx.db.state.id.find(keyOf(simulationId, entity, key))) return;
+  for (const row of [...ctx.db.state.simulationId.filter(simulationId)]) {
+    if (row.key === key) ctx.db.state.id.delete(row.id);
+  }
+  for (const job of [...ctx.db.faultEvent.faultId.filter(keyOf(simulationId, entity))]) cancelJob(ctx, job.scheduledId);
 });
 
 export const advanceEvent = db.reducer({ onSchedule: eventJob }, { arg: eventJob.rowType }, (ctx, { arg }) => {
   ensure(ctx.sender.equals(ctx.identity), 'Scheduler only');
+  if (!ctx.db.eventJob.scheduledId.find(arg.scheduledId)) return;
   const simulation = ctx.db.simulation.id.find(arg.simulationId);
+  const faultOrigin = ctx.db.faultEvent.scheduledId.find(arg.scheduledId)?.origin;
+  if (faultOrigin) ctx.db.faultEvent.scheduledId.delete(arg.scheduledId);
   if (simulation?.status !== 'running') return;
+  if (faultOrigin && !ctx.db.state.id.find(keyOf(simulation.id, faultOrigin, impactKey(faultOrigin)))) return;
   const active = ctx.db.entity.id.find(keyOf(simulation.worldId, arg.entity))?.active;
   const trigger = keyOf(simulation.worldId, arg.entity, arg.event);
   const rules = active ? [...ctx.db.behavior.trigger.filter(trigger)].filter(row => row.active) : [];
@@ -120,7 +145,8 @@ export const advanceEvent = db.reducer({ onSchedule: eventJob }, { arg: eventJob
     lastOutcome: ready.length ? 'applied' : retry ? 'retry_requested' : 'no_match',
   });
   if (retry) {
-    enqueue(ctx, { simulationId: simulation.id, entity: arg.entity, event: arg.event, depth: arg.depth, attempt: arg.attempt + 1 }, retry.delayMs);
+    enqueue(ctx, { simulationId: simulation.id, entity: arg.entity, event: arg.event, depth: arg.depth,
+      attempt: arg.attempt + 1, faultOrigin }, retry.delayMs);
   }
   for (const { rule } of ready) {
     for (const assignment of rule.set) putState(ctx, simulation, arg.entity, assignment.key, assignment.value);
@@ -128,6 +154,7 @@ export const advanceEvent = db.reducer({ onSchedule: eventJob }, { arg: eventJob
       enqueue(ctx, {
         simulationId: simulation.id, entity: emission.target ?? arg.entity, event: emission.event,
         depth: arg.depth + 1, attempt: 1,
+        faultOrigin,
       }, emission.delayMs);
     }
   }

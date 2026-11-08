@@ -16,9 +16,10 @@ export function worldConnection(config: WorldConnectionConfig) {
   return config.token ? builder.withToken(config.token) : builder;
 }
 
-export function worldQueries(worldId: string, simulationId?: string) {
+export function worldQueries(worldId: string, simulationId?: string, listWorlds = false) {
+  const selectedWorld = tables.myWorlds.where(row => row.id.eq(worldId));
   return [
-    tables.myWorlds.where(row => row.id.eq(worldId)),
+    listWorlds ? tables.myWorlds : selectedWorld,
     tables.myMemberships.where(row => row.worldId.eq(worldId)),
     tables.worldEntities.where(row => row.worldId.eq(worldId)),
     tables.worldRelations.where(row => row.worldId.eq(worldId)),

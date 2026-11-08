@@ -13,7 +13,9 @@ $env:NVIDIA_API_KEY = 'your NVIDIA key'
 npm.cmd run dev
 ```
 
-The dev server starts its own local SpacetimeDB instance on port 3382 and opens the page on an available port starting at 5173. The browser opens on an empty world for the actual train-ticket commit. **Start** creates the simulation and starts four Explorers. Verified findings grow the map and appear in the Agent speech bubbles. After a service appears, use the bug icon to inject a fault. **Reset** stops the simulation and any active exploration, keeping discoveries in the database. Restart the dev server for a new empty world.
+The dev server starts its own local SpacetimeDB instance on port 3382 and opens the page on an available port starting at 5173. The repository picker lists clean Git checkouts directly under `repo/`, with train-ticket selected by default when present. Each checkout starts in its own world. Restart the dev server after adding a checkout to the directory.
+
+**Start** creates a simulation for the selected repository and starts its four Explorers. Verified findings grow the map and appear in the Agent speech bubbles. Use the bug icon to inject a fault, or pick up the wrench and click the red fault origin to remove its impact and cancel its pending events. Already executed behavior state stays in the simulation history. **Reset** stops the selected simulation and its active exploration, keeping discoveries in the database.
 
 The four Explorers share one implementation and choose distinct initial paths using their seeds. By default each Explorer can process 16 tasks. They verify the Git-tracked Spring Boot entries and explicit HTTP call sites first, then use the model for implementation follow-ups. Set `LATTICE_DEMO_TURNS` before launch to change the task budget per Explorer. The private browser link is saved at `.data/interactive-demo/browser-url.txt` if you need to reopen it. Ctrl+C closes the demo processes. Model requests use the NVIDIA key in the terminal.
 

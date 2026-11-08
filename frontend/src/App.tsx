@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Box, Bug, Crosshair, GitBranch, Layers3, Play, RotateCcw, Users } from 'lucide-react';
+import type { MouseEvent } from 'react';
+import { Box, Bug, ChevronDown, Crosshair, GitBranch, Layers3, Play, RotateCcw, Users, Wrench } from 'lucide-react';
 
 import SystemMap from './map/SystemMap';
 import { withSelection } from './mapSelection';
@@ -14,19 +15,21 @@ const agents = [
 ] as const;
 const demoLabel = import.meta.env.VITE_LATTICE_DEMO_LABEL;
 const emptyMessages: AgentMessage[] = [];
+type Tool = 'bug' | 'wrench';
 
 export default function App() {
-  const { snapshot, connection, error: feedError } = useWorldFeed();
+  const { snapshot, connection, error: feedError, worlds, worldId } = useWorldFeed();
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
-  const [pickup, setPickup] = useState<{ x: number; y: number } | null>(null);
+  const [pickup, setPickup] = useState<{ tool: Tool; x: number; y: number } | null>(null);
   const bugCursor = useRef<HTMLSpanElement>(null);
   const simulationKey = snapshot ? simulationStorageKey(snapshot.world.id) : '';
   const simulation = snapshot?.simulations.find(row => row.id === sessionStorage.getItem(simulationKey) && row.status === 'running');
   const canControl = !!connection && !!snapshot?.canSimulate && !busy;
   const hasService = snapshot?.entities.some(row => row.active && row.kind === 'service');
   const placing = !!pickup && !!simulation && !!connection;
+  const repairing = placing && pickup?.tool === 'wrench';
   const graph = useMemo(() => buildRepositoryGraph(snapshot?.entities, snapshot?.relations), [snapshot?.entities, snapshot?.relations]);
   const impact = presentSimulation(snapshot?.entities ?? [], snapshot?.states ?? [], simulation?.id);
   const presentation = withSelection(graph, impact.presentation, selected);
@@ -49,19 +52,33 @@ export default function App() {
     };
   }, [placing]);
 
+  function pickTool(tool: Tool, event: MouseEvent<HTMLButtonElement>) {
+    if (placing && pickup?.tool === tool) {
+      setPickup(null);
+      return;
+    }
+    const box = event.currentTarget.getBoundingClientRect();
+    setPickup(event.detail
+      ? { tool, x: event.clientX, y: event.clientY }
+      : { tool, x: box.left + box.width / 2, y: box.top + box.height / 2 });
+  }
+
   async function selectNode(id: string | null) {
     if (!placing) {
       setSelected(current => current === id ? null : id);
       return;
     }
-    const entity = snapshot?.entities.find(row => row.id === id && row.active && row.kind === 'service');
+    const entity = snapshot?.entities.find(row => row.id === id && (repairing
+      ? impact.presentation.nodes?.[row.id]?.tone === 'warning' : row.active && row.kind === 'service'));
     if (!entity || !canControl || !connection || !simulation) return;
     setPickup(null);
     setSelected(null);
     setError('');
     setBusy(true);
     try {
-      await connection.reducers.setBug({ simulationId: simulation.id, entity: entity.key });
+      const args = { simulationId: simulation.id, entity: entity.key };
+      if (repairing) await connection.reducers.clearBug(args);
+      else await connection.reducers.setBug(args);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -103,21 +120,29 @@ export default function App() {
           <b>LATTICE</b>
         </div>
         <div className="incident-heading">
-          <h1>{snapshot?.world.repository ?? 'Dependency World'}</h1>
+          <label className="repo-picker">
+            <select aria-label="Repository" value={worlds.some(world => world.id === worldId) ? worldId : ''}
+              disabled={!worlds.length} onChange={event => {
+                const url = new URL(location.href);
+                url.searchParams.set('world', event.target.value);
+                location.assign(url);
+              }}>
+              <option value="" disabled>Choose repository</option>
+              {worlds.map(world => <option key={world.id} value={world.id}>
+                {world.repository}{worlds.filter(row => row.repository === world.repository).length > 1 ? ` · ${world.commit.slice(0, 8)}` : ''}
+              </option>)}
+            </select>
+            <ChevronDown size={17} aria-hidden="true" />
+          </label>
         </div>
         <div className="controls">
-          <button type="button" className="bug-button" aria-label="Place bug" aria-pressed={placing}
-            disabled={!canControl || !simulation || !hasService} title={placing ? 'Cancel bug placement' : 'Place bug'} onClick={event => {
-              if (placing) {
-                setPickup(null);
-                return;
-              }
-              const box = event.currentTarget.getBoundingClientRect();
-              setPickup(event.detail
-                ? { x: event.clientX, y: event.clientY }
-                : { x: box.left + box.width / 2, y: box.top + box.height / 2 });
-            }}>
+          <button type="button" className="bug-button" aria-label="Place bug" aria-pressed={placing && !repairing}
+            disabled={!canControl || !simulation || !hasService} title="Place bug" onClick={event => pickTool('bug', event)}>
             <Bug size={23} strokeWidth={1.75} aria-hidden="true" />
+          </button>
+          <button type="button" className="bug-button wrench-button" aria-label="Clear bug" aria-pressed={repairing}
+            disabled={!canControl || !simulation || !impact.origins} title="Clear bug" onClick={event => pickTool('wrench', event)}>
+            <Wrench size={21} strokeWidth={1.75} aria-hidden="true" />
           </button>
           <button className={simulation ? undefined : 'primary'} onClick={() => void control()} disabled={!canControl}>
             {simulation ? <><RotateCcw size={16} /> Reset</> : <><Play size={15} fill="currentColor" /> Start</>}
@@ -126,8 +151,8 @@ export default function App() {
         </div>
       </header>
 
-      {placing && pickup && <span ref={bugCursor} className="bug-cursor" style={{ left: pickup.x, top: pickup.y }} aria-hidden="true">
-        <Bug size={25} strokeWidth={2} />
+      {placing && pickup && <span ref={bugCursor} className={`bug-cursor${repairing ? ' repair-cursor' : ''}`} style={{ left: pickup.x, top: pickup.y }} aria-hidden="true">
+        {repairing ? <Wrench size={24} strokeWidth={2} /> : <Bug size={25} strokeWidth={2} />}
       </span>}
 
       <section className="arena" aria-label="System state and agent activity">

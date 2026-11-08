@@ -1,6 +1,6 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, writeFile } from 'node:fs/promises';
 import { connect } from 'node:net';
 import { basename, join, resolve } from 'node:path';
 import { setTimeout as pause } from 'node:timers/promises';
@@ -22,6 +22,35 @@ interface DemoOptions {
   webPort?: number;
   dataDirectory?: string;
   turns?: number;
+  repositoryDirectory?: string;
+}
+
+interface DemoRepository {
+  worldId: string;
+  path: string;
+  name: string;
+  commit: string;
+  serviceEntries?: ReadonlyMap<string, string>;
+  simulationId?: string;
+  run?: ExplorationHandle;
+}
+
+async function localRepositories(directory: string) {
+  const repositories = new Map<string, DemoRepository>();
+  const folders = (await readdir(directory, { withFileTypes: true })).filter(entry => entry.isDirectory())
+    .sort((a, b) => a.name.localeCompare(b.name));
+  for (const folder of folders) {
+    try {
+      const path = await repositoryRoot(join(directory, folder.name));
+      const { commit, tracked } = await repositoryRevision(path);
+      const serviceEntries = serviceEntryPaths(tracked);
+      const worldId = `repo-${randomUUID()}`;
+      repositories.set(worldId, { worldId, path, name: basename(path), commit, serviceEntries: serviceEntries.size ? serviceEntries : undefined });
+    } catch (error) {
+      log(`Skipping ${folder.name} — ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  return repositories;
 }
 
 function port(value: number, name: string) {
@@ -68,23 +97,20 @@ export async function startDemo(options: DemoOptions = {}) {
     throw new Error(`Demo ports ${webPort} (web) and ${dbPort} (database) must be free`);
   }
   const dataDirectory = resolve(options.dataDirectory ?? join(root, '.data', 'interactive-demo'));
-  const repositoryPath = await repositoryRoot(join(root, 'repo', 'train-ticket'));
-  const { commit, tracked } = await repositoryRevision(repositoryPath);
-  const serviceEntries = serviceEntryPaths(tracked);
-  if (!serviceEntries.size) throw new Error('The train-ticket commit contains no Spring Boot module entry candidates');
+  const repositories = await localRepositories(resolve(options.repositoryDirectory ?? join(root, 'repo')));
+  const initial = [...repositories.values()].find(repository => repository.name === 'train-ticket') ?? repositories.values().next().value;
+  if (!initial) throw new Error('Add a clean Git checkout to the repo directory');
+  const { worldId } = initial;
   const { command, args } = spacetimeCli();
   const token = publisherToken();
   const uri = `http://127.0.0.1:${dbPort}`;
   const database = 'lattice-train-ticket-demo';
   const config = { uri, database };
-  const worldId = `train-ticket-${randomUUID()}`;
   const modelReady = !!options.harness || !!process.env.NVIDIA_API_KEY?.trim();
-  const label = 'Train-ticket demo';
+  const label = 'Repository demo';
   let server: ChildProcess | undefined;
   let owner: DbConnection | undefined;
   let vite: ViteDevServer | undefined;
-  let run: ExplorationHandle | undefined;
-  let simulationId: string | undefined;
   let pending = Promise.resolve();
   let closed = false;
   let closing: Promise<void> | undefined;
@@ -95,7 +121,7 @@ export async function startDemo(options: DemoOptions = {}) {
     closing = (async () => {
       try {
         await pending;
-        await run?.stop();
+        await Promise.all([...repositories.values()].map(repository => repository.run?.stop()));
       } finally {
         try {
           await vite?.close();
@@ -109,7 +135,7 @@ export async function startDemo(options: DemoOptions = {}) {
   }
 
   try {
-    log(`Preparing train-ticket ${commit.slice(0, 8)} with ${serviceEntries.size} Git-tracked service entry candidates and local SpacetimeDB on port ${dbPort}`);
+    log(`Preparing ${repositories.size} Git repositories and local SpacetimeDB on port ${dbPort}`);
     await mkdir(dataDirectory, { recursive: true });
     server = spawn(command, [...args, 'start', '--non-interactive', '--listen-addr', `127.0.0.1:${dbPort}`,
       '--data-dir', join(dataDirectory, 'data'), '--jwt-pub-key-path', join(dataDirectory, 'jwt.pub.pem'),
@@ -127,39 +153,45 @@ export async function startDemo(options: DemoOptions = {}) {
     const publish = spawn(command, [...args, 'publish', database, '--server', uri, '--module-path', 'spacetime_db', '--yes=skip-login'],
       { cwd: root, stdio: 'inherit', windowsHide: true });
     if (await exitStatus(publish) !== 0) throw new Error('Could not publish the local SpacetimeDB module');
-    log('Local database ready; creating an empty repository world');
+    log('Local database ready; creating isolated repository worlds');
 
     const { client } = await connectDatabase({ ...config, token });
     owner = client;
-    await owner.reducers.createWorld({ id: worldId, repository: basename(repositoryPath), commit });
-    const operatorToken = await grantOperator(owner, config, worldId);
+    for (const repository of repositories.values()) {
+      await owner.reducers.createWorld({ id: repository.worldId, repository: repository.name, commit: repository.commit });
+    }
+    const operatorToken = await grantOperator(owner, config, [...repositories.keys()]);
 
-    const simulations = tables.worldSimulations.where(row => row.worldId.eq(worldId));
+    const simulations = [...repositories.keys()].map(id => tables.worldSimulations.where(row => row.worldId.eq(id)));
     const start = (row: Simulation) => {
-      if (closed || simulationId || !modelReady || row.label !== label || row.status !== 'running') return;
-      simulationId = row.id;
-      log('Start committed in SpacetimeDB; preparing four Explorer sessions');
+      const repository = repositories.get(row.worldId);
+      if (closed || !repository || repository.simulationId || !modelReady || row.label !== label || row.status !== 'running') return;
+      repository.simulationId = row.id;
+      log(`Start committed for ${repository.name}; preparing four Explorer sessions`);
       pending = pending.then(async () => {
         if (closed || client.db.worldSimulations.id.find(row.id)?.status !== 'running') return;
         const harness = options.harness ?? new CodexHarness({ provider: 'nvidia' });
         const manager = new AgentManager({
-          database: new SpacetimeExplorationDatabase({ ...config, token, worldId }), harness, onActivity: printAgentActivity,
+          database: new SpacetimeExplorationDatabase({ ...config, token, worldId: repository.worldId }), harness, onActivity: printAgentActivity,
         });
-        const handle = await manager.start({ repositoryPath, agentCount: 4, maxTurnsPerAgent: turns, serviceEntries });
-        run = handle;
-        log(`Train-ticket exploration started with four Agents (${turns} turns maximum per Agent)`);
+        const handle = await manager.start({
+          repositoryPath: repository.path, agentCount: 4, maxTurnsPerAgent: turns, serviceEntries: repository.serviceEntries,
+        });
+        repository.run = handle;
+        log(`${repository.name} exploration started with four Agents (${turns} turns maximum per Agent)`);
         void handle.done.then(async result => {
           const { world } = await manager.getContext(handle.id);
           const queued = world?.frontier.filter(task => task.status === 'queued').length ?? 0;
-          log(`Exploration ${result.phase}. ${world?.entities.length ?? 0} entities, ${world?.relations.length ?? 0} relations, ${world?.behaviors.length ?? 0} behaviors. ${queued} tasks remain queued. The webpage is still running.`);
+          log(`${repository.name} exploration ${result.phase}. ${world?.entities.length ?? 0} entities, ${world?.relations.length ?? 0} relations, ${world?.behaviors.length ?? 0} behaviors. ${queued} tasks remain queued.`);
         }).catch(error => log(`Could not summarize exploration — ${error instanceof Error ? error.message : String(error)}`));
       }).catch(error => log(`Could not start exploration — ${error instanceof Error ? error.message : String(error)}`));
     };
     client.db.worldSimulations.onInsert((_context, row) => start(row));
     client.db.worldSimulations.onUpdate((_context, _before, row) => {
-      if (row.id === simulationId && row.status === 'stopped') {
-        log('Reset committed; stopping active Explorers');
-        pending = pending.then(async () => { await run?.stop(); }).catch(error => log(`Could not stop exploration — ${String(error)}`));
+      const repository = repositories.get(row.worldId);
+      if (repository && row.id === repository.simulationId && row.status === 'stopped') {
+        log(`Reset committed for ${repository.name}; stopping active Explorers`);
+        pending = pending.then(async () => { await repository.run?.stop(); }).catch(error => log(`Could not stop exploration — ${String(error)}`));
       }
     });
     await new Promise<void>((resolve, reject) => {
@@ -192,7 +224,7 @@ export async function startDemo(options: DemoOptions = {}) {
     vite.printUrls();
     log(modelReady ? 'Waiting for the browser Start button; model requests have not started'
       : 'Waiting for the browser Start button; set NVIDIA_API_KEY and restart to enable exploration');
-    return { worldId, browserUrl, config, close, getRun: () => run };
+    return { worldId, browserUrl, config, close, getRun: (id = worldId) => repositories.get(id)?.run };
   } catch (error) {
     await close();
     throw error;

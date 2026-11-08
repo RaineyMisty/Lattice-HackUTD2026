@@ -7,6 +7,7 @@ import { type Infer as __Infer } from "spacetimedb";
 
 // Import all reducer arg schemas
 import ClaimTaskReducer from "../claim_task_reducer";
+import ClearBugReducer from "../clear_bug_reducer";
 import CreateSimulationReducer from "../create_simulation_reducer";
 import CreateWorldReducer from "../create_world_reducer";
 import RequestEventReducer from "../request_event_reducer";
@@ -18,6 +19,7 @@ import StopSimulationReducer from "../stop_simulation_reducer";
 import SubmitDiscoveryReducer from "../submit_discovery_reducer";
 
 export type ClaimTaskParams = __Infer<typeof ClaimTaskReducer>;
+export type ClearBugParams = __Infer<typeof ClearBugReducer>;
 export type CreateSimulationParams = __Infer<typeof CreateSimulationReducer>;
 export type CreateWorldParams = __Infer<typeof CreateWorldReducer>;
 export type RequestEventParams = __Infer<typeof RequestEventReducer>;

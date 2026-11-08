@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import {
-  worldConnection, worldQueries, type DbConnection, type Entity, type EntityState, type Frontier,
+  tables, worldConnection, worldQueries, type DbConnection, type Entity, type EntityState, type Frontier,
   type Relation, type RepositoryWorld, type Simulation,
 } from '../../spacetime_db/client';
 import deployment from '../../spacetime_db/connection.json';
@@ -32,10 +32,10 @@ export interface WorldSnapshot {
 export function useWorldFeed() {
   const [snapshot, setSnapshot] = useState<WorldSnapshot | null>(null);
   const [connection, setConnection] = useState<DbConnection | null>(null);
-  const [error, setError] = useState(worldId ? '' : 'Select a repository world');
+  const [worlds, setWorlds] = useState<RepositoryWorld[]>([]);
+  const [error, setError] = useState('');
 
   useEffect(() => {
-    if (!worldId) return;
     let disposed = false;
     const fail = (message: string) => {
       if (disposed) return;
@@ -61,9 +61,16 @@ export function useWorldFeed() {
 
         const read = () => {
           if (disposed || !applied) return;
-          const world = [...client.db.myWorlds.iter()].find(row => row.id === worldId && !/^0+$/.test(row.commit));
+          const available = [...client.db.myWorlds.iter()].filter(row => !/^0+$/.test(row.commit))
+            .sort((a, b) => a.repository.localeCompare(b.repository) || a.id.localeCompare(b.id));
+          setWorlds(available);
+          const world = available.find(row => row.id === worldId);
           if (!world) {
             setSnapshot(null);
+            if (!worldId && available.length) {
+              setError('');
+              return;
+            }
             if (currentWorldId !== 'no-access') console.info('Lattice browser identity', identity.toHexString());
             currentWorldId = 'no-access';
             setError('Repository access required');
@@ -132,10 +139,11 @@ export function useWorldFeed() {
           table.onUpdate(changed);
           table.onDelete(changed);
         }
+        const queries = worldId ? worldQueries(worldId, undefined, true) : [tables.myWorlds];
         client.subscriptionBuilder()
           .onApplied(() => { applied = true; read(); })
           .onError(() => fail('Repository subscription failed'))
-          .subscribe(worldQueries(worldId));
+          .subscribe(queries);
       })
       .onConnectError((_context, cause) => fail(cause.message))
       .onDisconnect(() => fail('Database disconnected'))
@@ -146,5 +154,5 @@ export function useWorldFeed() {
     };
   }, []);
 
-  return { snapshot, connection, error };
+  return { snapshot, connection, error, worlds, worldId };
 }

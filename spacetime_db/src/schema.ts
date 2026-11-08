@@ -73,6 +73,9 @@ export const eventJob = table({ name: 'event_schedule' }, {
   simulationId: stringIndex(), entity: t.string(), event: t.string(),
   depth: t.u8(), attempt: t.u8(),
 });
+export const faultEvent = table({ name: 'fault_event_origin' }, {
+  scheduledId: t.u64().primaryKey(), faultId: stringIndex(), origin: t.string(),
+});
 // This public signal contains no repository, source, or event payload. The
 // corresponding state and simulation views enforce world membership.
 export const worldSignal = table({ name: 'world_signal', public: true, event: true }, {
@@ -81,7 +84,7 @@ export const worldSignal = table({ name: 'world_signal', public: true, event: tr
 
 export const db = schema({
   admin, world, member, entity, relation, behavior, evidence, frontier, simulation,
-  state, lease, eventJob, worldSignal,
+  state, lease, eventJob, faultEvent, worldSignal,
 });
 export type Ctx = ReducerCtx<typeof db.schemaType>;
 export type Rule = Infer<typeof rule>;

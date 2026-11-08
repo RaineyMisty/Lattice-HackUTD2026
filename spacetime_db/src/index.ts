@@ -3,7 +3,7 @@ import { behavior, db, entity, evidence, frontier, member, relation, simulation,
 
 export default db;
 export { claimTask, createWorld, expireLease, init, reviewDiscovery, setDiscoveryActive, setMember, submitDiscovery } from './knowledge';
-export { advanceEvent, createSimulation, requestEvent, setBug, stopSimulation } from './simulation';
+export { advanceEvent, clearBug, createSimulation, requestEvent, setBug, stopSimulation } from './simulation';
 
 export const myWorlds = db.view({ name: 'my_worlds', public: true }, t.array(world.rowType), ctx =>
   [...ctx.db.member.identity.filter(ctx.sender)].map(row => ctx.db.world.id.find(row.worldId)!));

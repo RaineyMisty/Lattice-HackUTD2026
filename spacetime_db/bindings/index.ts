@@ -35,6 +35,7 @@ import {
 
 // Import all reducer arg schemas
 import ClaimTaskReducer from "./claim_task_reducer";
+import ClearBugReducer from "./clear_bug_reducer";
 import CreateSimulationReducer from "./create_simulation_reducer";
 import CreateWorldReducer from "./create_world_reducer";
 import RequestEventReducer from "./request_event_reducer";
@@ -139,6 +140,7 @@ const tablesSchema = __schema({
 /** The schema information for all reducers in this module. This is defined the same way as the reducers would have been defined in the server, except the body of the reducer is omitted in code generation. */
 const reducersSchema = __reducers(
   __reducerSchema("claim_task", ClaimTaskReducer),
+  __reducerSchema("clear_bug", ClearBugReducer),
   __reducerSchema("create_simulation", CreateSimulationReducer),
   __reducerSchema("create_world", CreateWorldReducer),
   __reducerSchema("request_event", RequestEventReducer),

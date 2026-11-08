@@ -145,6 +145,32 @@ test('standalone world coordinates four agents and advances simulations through 
   await subscribe(reconnect);
   assert.equal(reconnect.db.worldStates.count(), BigInt(rows.length));
   assert.equal(reconnect.db.worldSignal.count(), 0n);
+  await owner.reducers.submitDiscovery({
+    ...empty, behaviors: [
+      { entity: reporting, name: 'delayed fault response', source, rule: {
+        event: 'lattice.fault', when: [], set: [], retry: undefined,
+        emit: [{ target: checkout, event: 'report-response', delayMs: 900 }],
+      } },
+      { entity: checkout, name: 'report response', source, rule: {
+        event: 'report-response', when: [], emit: [], retry: undefined,
+        set: [{ key: 'report-response', value: 'true' }],
+      } },
+    ],
+  });
+  await owner.reducers.setBug({ simulationId, entity: reporting });
+  await waitFor(() => [...owner.db.worldSimulations.iter()].find(row =>
+    row.id === simulationId && row.lastEntity === reporting && row.lastOutcome === 'applied'), 'report fault scheduled its follow-up');
+  await assert.rejects(outsider.reducers.clearBug({ simulationId, entity: payment }), /access denied/i);
+  await owner.reducers.clearBug({ simulationId, entity: payment });
+  await owner.reducers.clearBug({ simulationId, entity: payment });
+  const remaining = () => [...owner.db.worldStates.iter()].filter(row => row.key.startsWith('lattice.impact:'));
+  assert.deepEqual(remaining().map(row => row.key), [`lattice.impact:${reporting}`]);
+  await owner.reducers.clearBug({ simulationId, entity: reporting });
+  assert.equal(remaining().length, 0);
+  await sleep(1000);
+  assert.equal([...owner.db.worldStates.iter()].some(row => row.key === 'report-response'), false);
+  await owner.reducers.setBug({ simulationId, entity: payment });
+  assert.equal(remaining().length, 3);
   await owner.reducers.stopSimulation({ id: simulationId });
   await assert.rejects(owner.reducers.requestEvent({ simulationId, entity: checkout, event: 'prepare', delayMs: 1 }), /stopped/i);
 });

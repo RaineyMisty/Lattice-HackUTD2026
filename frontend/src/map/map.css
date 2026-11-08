@@ -8,7 +8,16 @@
   user-select: none;
 }
 .map.is-dragging, .map.is-dragging .map-node { cursor: grabbing; }
-.map > svg { display: block; width: 100%; height: 100%; }
+.map > svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  --edge-fade: clamp(12px, 2.6vw, 30px);
+  mask-image:
+    linear-gradient(to right, transparent, black var(--edge-fade), black calc(100% - var(--edge-fade)), transparent),
+    linear-gradient(to bottom, transparent, black var(--edge-fade), black calc(100% - var(--edge-fade)), transparent);
+  mask-composite: intersect;
+}
 .map-pan { transition: transform 380ms cubic-bezier(.22, 1.42, .44, 1); }
 .map.is-dragging .map-pan, .map[data-pan-mode="free"] .map-pan { transition: none; }
 

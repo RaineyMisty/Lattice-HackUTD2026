@@ -125,6 +125,13 @@ export const Evidence = __t.object("Evidence", {
 });
 export type Evidence = __Infer<typeof Evidence>;
 
+export const FaultEventOrigin = __t.object("FaultEventOrigin", {
+  scheduledId: __t.u64(),
+  faultId: __t.string(),
+  origin: __t.string(),
+});
+export type FaultEventOrigin = __Infer<typeof FaultEventOrigin>;
+
 export const Frontier = __t.object("Frontier", {
   id: __t.string(),
   worldId: __t.string(),
