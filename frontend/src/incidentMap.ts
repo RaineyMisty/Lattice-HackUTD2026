@@ -1,61 +1,44 @@
-import type { WorldSnapshot } from '../../shared/types';
-import type { LinkAppearance, MapGraph, MapNode, MapPresentation, NodeAppearance } from './map/types';
-import { demoLinks, demoNodes, incidentRegion as homeRegion, primaryNodes } from './incidentMapFixture';
+import type { Entity, EntityState, Relation } from '../../spacetime_db/client';
+import type { LinkAppearance, MapGraph, MapPresentation, NodeAppearance, NodeKind } from './map/types';
 
-export function buildIncidentGraph(world: WorldSnapshot | null): MapGraph {
-  const assets = world?.assets ?? [];
-  const knownAssets = new Map(assets.map(asset => [asset.id, asset]));
-  const nodes: MapNode[] = primaryNodes.map(node => ({ ...node, label: knownAssets.get(node.id)?.name ?? node.label }));
-  for (const asset of assets) {
-    if (nodes.some(node => node.id === asset.id)) continue;
-    nodes.push({
-      id: asset.id, label: asset.name, region: asset.department || homeRegion,
-      kind: 'service', major: asset.businessCriticality === 'critical',
-    });
-  }
-  const byId = new Map(nodes.map(node => [node.id, node]));
-  const links = [];
-  for (const edge of world?.dependencies ?? []) {
-    const source = byId.get(edge.from);
-    if (!source) continue;
-    if (edge.kind === 'component' && !byId.has(edge.to)) {
-      const node: MapNode = {
-        id: edge.to, label: edge.to === 'tokengate' ? 'TokenGate' : edge.to,
-        region: source.region, kind: 'component', major: true,
-      };
-      nodes.push(node);
-      byId.set(node.id, node);
-    }
-    if (byId.has(edge.to)) links.push({ id: JSON.stringify([edge.from, edge.to, edge.kind]), from: edge.from, to: edge.to });
-  }
-  if (assets.length > 4) return { nodes, links, homeRegion };
-  return { nodes: [...nodes, ...demoNodes], links: [...links, ...demoLinks], homeRegion };
+const kinds: Record<string, NodeKind> = {
+  service: 'service', module: 'module', file: 'file', function: 'function', class: 'component', resource: 'data',
+};
+
+export function buildRepositoryGraph(entities: Entity[] = [], relations: Relation[] = []): MapGraph {
+  const nodes = entities.filter(entity => entity.active).map(entity => ({
+    id: entity.id,
+    label: entity.symbol || entity.path.split('/').at(-1) || entity.path,
+    region: entity.path.includes('/') ? entity.path.split('/')[0] : 'Repository',
+    kind: kinds[entity.kind] ?? 'component',
+    major: entity.kind === 'service',
+  }));
+  const ids = new Set(nodes.map(node => node.id));
+  const links = relations.filter(edge => edge.active && ids.has(edge.from) && ids.has(edge.to))
+    .map(edge => ({ id: edge.id, from: edge.from, to: edge.to }));
+  const homeRegion = nodes.find(node => node.kind === 'service')?.region ?? nodes[0]?.region ?? 'Repository';
+  return { nodes, links, homeRegion };
 }
 
-export function incidentPresentation(world: WorldSnapshot | null, graph: MapGraph, bugNodeId: string | null = null): MapPresentation {
+export function presentSimulation(entities: Entity[], states: EntityState[], simulationId: string | undefined) {
   const nodes: Record<string, NodeAppearance> = {};
   const links: Record<string, LinkAppearance> = {};
-  let healthFocus: string | undefined;
-  let impactFocus: string | undefined;
-  for (const asset of world?.assets ?? []) {
-    if (asset.health) {
-      healthFocus ??= asset.id;
-      nodes[asset.id] = { tone: 'warning', caption: asset.health === 'attack' ? 'UNDER ATTACK' : 'SERVICE ERROR', pulse: true };
-    } else if (asset.status === 'direct') {
-      impactFocus ??= asset.id;
-      nodes[asset.id] = { tone: 'warning', caption: 'DIRECT IMPACT', pulse: true };
-    } else if (asset.status === 'downstream') {
-      nodes[asset.id] = { tone: 'caution', caption: 'Downstream risk' };
-    } else if (asset.status === 'unaffected') {
-      nodes[asset.id] = { tone: 'positive', caption: 'Unaffected' };
+  const entityIds = new Map(entities.filter(entity => entity.active).map(entity => [entity.key, entity.id]));
+  let focusNodeId: string | undefined;
+  for (const row of states) {
+    if (!simulationId || row.simulationId !== simulationId || !row.key.startsWith('lattice.impact:')) continue;
+    const id = entityIds.get(row.entity);
+    if (!id) continue;
+    const impact = JSON.parse(row.value) as { status: string; relation?: string };
+    if (impact.status === 'fault_origin') {
+      nodes[id] = { tone: 'warning', caption: 'BUG', pulse: true };
+      focusNodeId = id;
+    } else if (impact.status === 'potential_impact') {
+      nodes[id] ??= { tone: 'caution', caption: 'Potential impact' };
+      if (impact.relation) links[impact.relation] = { tone: 'caution', emphasized: true };
     }
   }
-  for (const link of graph.links) {
-    const tone = nodes[link.from]?.tone;
-    if (tone) links[link.id] = { tone };
-  }
-  if (bugNodeId && graph.nodes.some(node => node.id === bugNodeId && node.kind === 'service')) {
-    nodes[bugNodeId] = { tone: 'warning', caption: 'BUG', pulse: true };
-  }
-  return { nodes, links, focusNodeId: healthFocus ?? impactFocus };
+  const presentation: MapPresentation = { nodes, links, focusNodeId };
+  const origins = Object.values(nodes).filter(node => node.tone === 'warning').length;
+  return { presentation, origins, potential: Object.keys(nodes).length - origins };
 }

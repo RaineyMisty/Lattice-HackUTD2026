@@ -1,62 +1,34 @@
 # Lattice
 
-A fictional TokenGate incident exercise for ASTER Commerce.
+Lattice displays a repository dependency world and simulates the impact of a fault. The React frontend uses the SDK in `spacetime_db/client` to subscribe to entities, relations, simulations, and exploration tasks. Its four Agent cards reflect task activity from the database.
 
-| Module | Responsibility |
-| --- | --- |
-| `frontend/` | React UI. Calls Start and Reset reducers and subscribes to the operator view through generated bindings. |
-| `agents/` | One runner with four independent role processes. Each subscribes to its assigned source and submits evidence and progress. |
-| `db/` | SpacetimeDB reducers, inference rules, access control, durable state, tasks, and notifications. `db/client/` contains generated TypeScript bindings. |
+## Run against a local repository world
 
-`shared/types/` contains type definitions. All impact classifications and inbox records come from the database.
+Use Node.js 22.12+ and SpacetimeDB CLI 2.14.1. Run the commands from the repository root in PowerShell. If the database module dependencies are missing, run `npm.cmd --prefix spacetime_db ci`.
 
-## Run locally
-
-Use Node.js 22.12+ and SpacetimeDB CLI 2.13.0. Install project dependencies with `pnpm install --frozen-lockfile` if needed. The launch commands below use Node directly.
-
-Start a disk-backed SpacetimeDB instance in its own terminal.
+Start SpacetimeDB in a separate terminal.
 
 ```powershell
-spacetime start --listen-addr 127.0.0.1:3000
+spacetime start --listen-addr 127.0.0.1:3380 --data-dir .data/living-world
 ```
 
-From the repository root, publish with your local publishing identity and register one operator plus four Agent identities.
+Publish with your CLI identity if the module is new. Create a world with the actual repository and commit through the database API, then pass its ID to the local setup. Setup grants a browser operator identity access to that existing world.
 
 ```powershell
-spacetime publish --server http://127.0.0.1:3000 --module-path db lattice-demo
-node --import tsx scripts/setup-local.ts
+spacetime publish lattice-world-local --server http://127.0.0.1:3380 --module-path spacetime_db
+$env:LATTICE_WORLD_ID = '<existing-world-id>'
+npm.cmd run setup:local
+npm.cmd run dev
 ```
 
-Setup stores per-role tokens under the ignored `.data/` directory. Open the operator URL saved in `.data/operator-url.txt` in the browser after starting the frontend. The URL grants operator access to this local demo and should be kept private.
+Open the private operator URL in `.data/repository-operator-url.txt`. Once discovery rows are available, click **Start**, pick up the bug icon, and drop it on a service. The database highlights the fault and its potential impact. **Reset** stops that simulation.
 
-Start each Agent command in its own terminal. For a slower recording, set `$env:LATTICE_AGENT_DELAY_MS = '1500'` in each Agent terminal before launching. The default fixture extractor reads the database-assigned fictional document.
+If port 5173 is in use, set `$env:LATTICE_WEB_PORT = '5174'` before running local setup and Vite.
 
-```powershell
-node --import tsx agents/src/cli.ts A
-node --import tsx agents/src/cli.ts B
-node --import tsx agents/src/cli.ts C
-node --import tsx agents/src/cli.ts D
-```
+## Connect to a live repository
 
-```powershell
-node scripts/dev.mjs
-```
+Without local setup, Vite uses the Maincloud deployment from `spacetime_db/connection.json`. Override it with `VITE_LATTICE_DB_URL`, `VITE_LATTICE_DATABASE`, and optionally `VITE_LATTICE_WORLD_ID`. A `?world=<id>` URL selects a repository explicitly.
 
-Open the operator URL and click **Start Investigation**. The Agent cards update as workers report progress. The graph and inbox update on committed database events. Stop the worker terminals and reload to see the same persisted results. **Reset** clears the incident and revokes unfinished work. Workers that remain connected will pick up the next incident.
+The publisher creates the world and uses `setMember` to grant the browser identity reader or operator access. When access is required, the page logs the browser identity to the developer console. The map starts empty and draws the selected world's subscribed entities and relations as they arrive.
 
-Set `LATTICE_DB_URL` and `LATTICE_DATABASE` for a different local deployment. Agent processes can take their own `LATTICE_AGENT_<role>_TOKEN` from the environment. See `.env.example` for optional model settings. The browser uses `VITE_LATTICE_DB_URL` and `VITE_LATTICE_DATABASE`; the development script loads them from the local setup config.
-
-## Verify
-
-```powershell
-node scripts/test.mjs
-node --import tsx --test db/test/live.test.ts
-```
-
-The first command runs the existing domain, runner, and reducer suites. The live test resets the configured incident, launches four Node processes, verifies the actual subscriptions and persisted rows, and checks access and stale-write rejection. Configure a dedicated test database before running it.
-
-Regenerate client bindings after a schema or reducer signature change.
-
-```powershell
-spacetime generate --lang typescript --module-path db --out-dir db/client
-```
+The standalone Agent CLI currently keeps its exploration output in memory. The frontend displays Agent activity once an external worker claims tasks in this database. See `spacetime_db/README.md` for the Agent and database APIs.
