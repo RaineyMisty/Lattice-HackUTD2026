@@ -8,5 +8,4 @@ dist/
 *.log
 .DS_Store
 .sites-runtime/
-spacetimedb/target/
-**/module_bindings/
+db/target/

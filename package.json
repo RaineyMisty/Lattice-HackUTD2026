@@ -4,17 +4,18 @@
   "private": true,
   "type": "module",
   "packageManager": "pnpm@11.25.0",
-  "engines": { "node": ">=22.12.0" },
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "scripts": {
     "dev": "node scripts/dev.mjs",
-    "dev:web": "vite --config apps/web/vite.config.ts apps/web",
-    "dev:server": "tsx apps/server/src/index.ts",
-    "build": "tsc --noEmit && vite build --config apps/web/vite.config.ts apps/web",
+    "build": "tsc --noEmit && vite build --config frontend/vite.config.ts frontend",
     "typecheck": "tsc --noEmit",
     "test": "node scripts/test.mjs",
     "test:db": "node scripts/test.mjs --database-only",
-    "agent": "tsx packages/agents/src/cli.ts",
-    "start": "tsx apps/server/src/index.ts"
+    "test:live": "node --import tsx --test db/test/live.test.ts",
+    "agent": "tsx agents/src/cli.ts",
+    "setup:local": "tsx scripts/setup-local.ts"
   },
   "dependencies": {
     "react": "^19.1.0",

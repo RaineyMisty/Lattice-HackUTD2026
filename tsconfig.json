@@ -6,6 +6,6 @@
     "allowImportingTsExtensions": true, "resolveJsonModule": true,
     "skipLibCheck": true, "types": ["node", "vite/client"]
   },
-  "include": ["apps", "packages", "spacetimedb/src"],
-  "exclude": ["node_modules", "apps/web/dist", "**/module_bindings"]
+  "include": ["frontend", "agents", "db", "shared"],
+  "exclude": ["node_modules", "frontend/dist", "db/dist"]
 }

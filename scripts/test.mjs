@@ -9,11 +9,10 @@ const env = { ...process.env, TEMP: temporary, TMP: temporary, TMPDIR: temporary
 const commands = [
   ...(!process.argv.includes('--database-only') ? [[
     '--import', 'tsx', '--test',
-    'packages/domain/src/domain.test.ts',
-    'packages/agents/src/runner.test.ts',
-    'apps/server/src/server.test.ts',
+    'db/src/domain/domain.test.ts',
+    'agents/src/runner.test.ts',
   ]] : []),
-  ['node_modules/vitest/vitest.mjs', 'run', '--config', 'spacetimedb/vitest.config.ts'],
+  ['node_modules/vitest/vitest.mjs', 'run', '--config', 'db/vitest.config.ts'],
 ];
 for (const args of commands) {
   const result = spawnSync(process.execPath, args, { cwd: root, stdio: 'inherit', env });

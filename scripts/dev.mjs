@@ -1,13 +1,22 @@
 import { spawn } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import path from 'node:path';
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const children = [
-  spawn(process.execPath, ['--import', 'tsx', 'apps/server/src/index.ts'], { cwd: root, stdio: 'inherit', env: process.env }),
-  spawn(process.execPath, ['node_modules/vite/bin/vite.js', '--config', 'apps/web/vite.config.ts', 'apps/web'], { cwd: root, stdio: 'inherit', env: process.env }),
-];
-let ending = false;
-function stop(code = 0) { if (ending) return; ending = true; for (const child of children) child.kill(); process.exitCode = code; }
-for (const child of children) { child.on('error', error => { console.error(error.message); stop(1); }); child.on('exit', code => stop(code ?? 0)); }
-process.on('SIGINT', () => stop());
-process.on('SIGTERM', () => stop());
+
+const root = fileURLToPath(new URL('../', import.meta.url));
+let config = {};
+try {
+  config = JSON.parse(readFileSync(new URL('../.data/lattice.json', import.meta.url), 'utf8'));
+} catch (error) {
+  if (error.code !== 'ENOENT') throw error;
+}
+
+const env = { ...process.env };
+if (config.uri) env.VITE_LATTICE_DB_URL ??= config.uri;
+if (config.database) env.VITE_LATTICE_DATABASE ??= config.database;
+const frontend = spawn(process.execPath, ['node_modules/vite/bin/vite.js', '--config', 'frontend/vite.config.ts', 'frontend'], {
+  cwd: root, stdio: 'inherit', env,
+});
+frontend.on('error', error => { console.error(error.message); process.exitCode = 1; });
+frontend.on('exit', code => { process.exitCode = code ?? 0; });
+process.once('SIGINT', () => frontend.kill());
+process.once('SIGTERM', () => frontend.kill());
