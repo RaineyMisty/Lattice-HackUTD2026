@@ -1,110 +1,213 @@
+import { forceCenter, forceCollide, forceLink, forceManyBody, forceSimulation, forceX, forceY } from 'd3-force';
+import type { SimulationLinkDatum, SimulationNodeDatum } from 'd3-force';
 import type { MapLink, MapNode } from './types';
 
+export interface Point { x: number; y: number }
 export interface Bounds { left: number; right: number; top: number; bottom: number }
-export interface Placement { node: MapNode; x: number; y: number; width: number; height: number }
-interface Region { name: string; bounds: Bounds }
+export interface Placement extends Point {
+  id: string;
+  radius: number;
+  collision: number;
+  labels: string[];
+  color: string;
+}
+interface Particle extends Placement, SimulationNodeDatum {
+  x: number;
+  y: number;
+  group: string;
+  anchor: Point;
+}
+interface Spring extends SimulationLinkDatum<Particle> {
+  source: Particle;
+  target: Particle;
+}
 
-const rowGap = 104;
-const columnGap = 26;
-const isPrimary = (node: MapNode) => !['data', 'queue', 'gateway', 'config', 'container'].includes(node.kind);
+const palette = ['#8cd9ff', '#c4a5ff', '#8ee5ca', '#f0bc89', '#a6b7ff', '#f4a5db', '#a8deb2'];
+const goldenAngle = Math.PI * (3 - Math.sqrt(5));
 
-export function boundsOf(placements: Placement[]): Bounds {
-  if (!placements.length) return { left: -100, right: 100, top: -60, bottom: 60 };
+function hash(value: string) {
+  let result = 2166136261;
+  for (let i = 0; i < value.length; i++) result = Math.imul(result ^ value.charCodeAt(i), 16777619);
+  return result >>> 0;
+}
+
+function wrap(label: string) {
+  const labels: string[] = [];
+  let rest = label;
+  while (rest.length > 18 && labels.length < 3) {
+    const split = Math.max(rest.lastIndexOf('-', 17), rest.lastIndexOf(' ', 17)) + 1;
+    const end = split >= 6 ? split : 18;
+    labels.push(rest.slice(0, end).trimEnd());
+    rest = rest.slice(end).trimStart();
+  }
+  if (rest) labels.push(rest.length > 18 ? `${rest.slice(0, 17)}…` : rest);
+  return labels;
+}
+
+function groups(nodes: readonly MapNode[], links: readonly MapLink[]) {
+  const regions = new Map(nodes.map(node => [node.id, node.region]));
+  const parent = new Map<string, string>();
+  const sizes = new Map<string, number>();
+  for (const region of regions.values()) sizes.set(region, (sizes.get(region) ?? 0) + 1);
+  const root = (region: string) => {
+    while (parent.has(region)) region = parent.get(region)!;
+    return region;
+  };
+  const pairs = new Map<string, { a: string; b: string; weight: number }>();
+  for (const link of links) {
+    const from = regions.get(link.from);
+    const to = regions.get(link.to);
+    if (from === undefined || to === undefined || from === to) continue;
+    const [a, b] = from < to ? [from, to] : [to, from];
+    const id = JSON.stringify([a, b]);
+    const pair = pairs.get(id);
+    if (pair) pair.weight++;
+    else pairs.set(id, { a, b, weight: 1 });
+  }
+  for (const pair of [...pairs.values()].sort((a, b) => b.weight - a.weight || a.a.localeCompare(b.a) || a.b.localeCompare(b.b))) {
+    const a = root(pair.a);
+    const b = root(pair.b);
+    const size = sizes.get(a)! + sizes.get(b)!;
+    if (a === b || size > 9) continue;
+    const [keep, merge] = a < b ? [a, b] : [b, a];
+    parent.set(merge, keep);
+    sizes.set(keep, size);
+  }
+  const groupOf = new Map(nodes.map(node => [node.id, root(node.region)]));
+  const ordered = [...new Set(groupOf.values())].sort((a, b) => sizes.get(b)! - sizes.get(a)! || a.localeCompare(b));
+  const anchors = new Map(ordered.map((group, index) => {
+    const distance = 105 * Math.sqrt(index);
+    return [group, { x: Math.cos(index * goldenAngle) * distance * 1.3, y: Math.sin(index * goldenAngle) * distance * .74 }];
+  }));
+  return { groupOf, anchors };
+}
+
+export function boundsOf(nodes: readonly Placement[]): Bounds {
+  if (!nodes.length) return { left: -40, right: 40, top: -40, bottom: 40 };
   return {
-    left: Math.min(...placements.map(item => item.x - item.width / 2)),
-    right: Math.max(...placements.map(item => item.x + item.width / 2)),
-    top: Math.min(...placements.map(item => item.y - item.height / 2)),
-    bottom: Math.max(...placements.map(item => item.y + item.height / 2)),
+    left: Math.min(...nodes.map(node => node.x - node.collision)),
+    right: Math.max(...nodes.map(node => node.x + node.collision)),
+    top: Math.min(...nodes.map(node => node.y - node.radius - 6)),
+    bottom: Math.max(...nodes.map(node => node.y + node.radius + 11 + node.labels.length * 13)),
   };
 }
 
-function arrangeRegion(nodes: MapNode[], links: readonly MapLink[]) {
-  const services = nodes.filter(isPrimary);
-  const serviceIds = new Set(services.map(node => node.id));
-  const hasComponent = services.some(node => node.kind === 'component');
-  const rank = new Map(services.map(node => [node.id, hasComponent && node.kind !== 'component' ? 1 : 0]));
-  const localLinks = links.filter(link => serviceIds.has(link.from) && serviceIds.has(link.to));
-  const remaining = new Map(services.map(node => [node.id, 0]));
-  const dependents = new Map<string, string[]>();
-  for (const { from, to } of localLinks) {
-    remaining.set(from, remaining.get(from)! + 1);
-    const children = dependents.get(to) ?? [];
-    children.push(from);
-    dependents.set(to, children);
-  }
-  const roots = services.filter(node => remaining.get(node.id) === 0).map(node => node.id);
-  for (const id of roots) {
-    for (const child of dependents.get(id) ?? []) {
-      rank.set(child, Math.max(rank.get(child)!, rank.get(id)! + 1));
-      const count = remaining.get(child)! - 1;
-      remaining.set(child, count);
-      if (count === 0) roots.push(child);
-    }
-  }
-
-  const rows = new Map<number, MapNode[]>();
-  const lastServiceRank = Math.max(0, ...rank.values());
-  for (const node of nodes) {
-    const layer = isPrimary(node) ? rank.get(node.id)! : lastServiceRank + 1;
-    const row = rows.get(layer) ?? [];
-    row.push(node);
-    rows.set(layer, row);
-  }
-  const placements: Placement[] = [];
-  let rowNumber = 0;
-  for (const [, row] of [...rows.entries()].sort(([a], [b]) => a - b)) {
-    for (let offset = 0; offset < row.length; offset += 5) {
-      const line = row.slice(offset, offset + 5);
-      const widths = line.map(node => node.major ? 200 : 162);
-      const span = widths.reduce((sum, width) => sum + width, 0) + columnGap * (line.length - 1);
-      let left = -span / 2;
-      line.forEach((node, index) => {
-        const width = widths[index];
-        placements.push({ node, x: left + width / 2, y: rowNumber * rowGap, width, height: node.major ? 64 : 50 });
-        left += width + columnGap;
-      });
-      rowNumber++;
-    }
-  }
-  const box = boundsOf(placements);
-  const middle = (box.top + box.bottom) / 2;
-  return placements.map(item => ({ ...item, y: item.y - middle }));
-}
-
-export function layoutTopology(nodes: readonly MapNode[], links: readonly MapLink[], homeRegion: string) {
-  const groups = new Map<string, MapNode[]>();
-  for (const node of nodes) {
-    const group = groups.get(node.region) ?? [];
-    group.push(node);
-    groups.set(node.region, group);
-  }
-  const clusters = [...groups].map(([name, group]) => ({ name, nodes: arrangeRegion(group, links) }));
-  const sizes = clusters.map(cluster => boundsOf(cluster.nodes));
-  const stepX = Math.max(200, ...sizes.map(box => box.right - box.left)) + 115;
-  const stepY = Math.max(120, ...sizes.map(box => box.bottom - box.top)) + 125;
-  const slots = [[-1, 0], [1, 0], [-1, 1], [1, 1], [-1, -1], [1, -1], [0, -1]];
-  const placements: Placement[] = [];
-  const regions: Region[] = [];
-  let outside = 0;
-  for (const cluster of clusters) {
-    const index = cluster.name === homeRegion ? -1 : outside++;
-    const [column, row] = index < 0 ? [0, 0] : slots[index] ?? [(index % 3) - 1, 2 + Math.floor((index - slots.length) / 3)];
-    const moved = cluster.nodes.map(item => ({ ...item, x: item.x + column * stepX, y: item.y + row * stepY }));
-    placements.push(...moved);
-    regions.push({ name: cluster.name, bounds: boundsOf(moved) });
-  }
-  return { placements, regions, bounds: boundsOf(placements) };
-}
-
 export function dependencyPath(from: Placement, to: Placement) {
-  if (from.y === to.y) {
-    const direction = Math.sign(to.x - from.x);
-    return `M${from.x + direction * from.width / 2} ${from.y}H${to.x - direction * (to.width / 2 + 2)}`;
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  const length = Math.hypot(dx, dy);
+  if (length < 1) return '';
+  const x = dx / length;
+  const y = dy / length;
+  const start = { x: from.x + x * from.radius, y: from.y + y * from.radius };
+  const end = { x: to.x - x * (to.radius + 4), y: to.y - y * (to.radius + 4) };
+  const bend = Math.min(16, length * .06);
+  return `M${start.x},${start.y}Q${(start.x + end.x) / 2 - y * bend},${(start.y + end.y) / 2 + x * bend} ${end.x},${end.y}`;
+}
+
+export function createForceLayout(render: (nodes: Placement[]) => void, reducedMotion: boolean) {
+  let particles = new Map<string, Particle>();
+  let signature: string | undefined;
+  let grab: { id: string; point: Point } | undefined;
+  const spring = forceLink<Particle, Spring>()
+    .distance(({ source, target }) => source.radius + target.radius + (source.group === target.group ? 52 : 92))
+    .strength(({ source, target }) => source.group === target.group ? .20 : .075);
+  const publish = () => render([...particles.values()].map(({ id, x, y, radius, collision, labels, color }) =>
+    ({ id, x, y, radius, collision, labels, color })));
+  const simulation = forceSimulation<Particle>().stop()
+    .alphaMin(.009).alphaDecay(.065).velocityDecay(.43)
+    .force('links', spring)
+    .force('charge', forceManyBody<Particle>().strength(-160).distanceMax(420))
+    .force('collide', forceCollide<Particle>(node => node.collision).iterations(3))
+    .force('center', forceCenter<Particle>(0, 0).strength(.04))
+    .force('x', forceX<Particle>(node => node.anchor.x).strength(.037))
+    .force('y', forceY<Particle>(node => node.anchor.y).strength(.057))
+    .on('tick', publish);
+
+  function heat(alpha: number) {
+    simulation.alpha(Math.max(simulation.alpha(), alpha));
+    if (reducedMotion) simulation.stop().tick(75);
+    else simulation.restart();
+    publish();
   }
-  const direction = Math.sign(to.y - from.y);
-  const startY = from.y + direction * from.height / 2;
-  const endY = to.y - direction * (to.height / 2 + 2);
-  const middle = (startY + endY) / 2;
-  const endX = to.x + Math.sign(from.x - to.x) * Math.min(to.width * .19, 28);
-  return `M${from.x} ${startY}C${from.x} ${middle} ${endX} ${middle} ${endX} ${endY}`;
+
+  return {
+    setGraph(nodes: readonly MapNode[], links: readonly MapLink[]) {
+      const key = JSON.stringify([
+        nodes.map(node => [node.id, node.label, node.region, node.kind, node.major]).sort(),
+        links.map(link => [link.from, link.to]).sort(),
+      ]);
+      if (key === signature) return;
+      signature = key;
+      const { groupOf, anchors } = groups(nodes, links);
+      const neighbors = new Map<string, Particle[]>();
+      function remember(id: string, other: string) {
+        const particle = particles.get(other);
+        if (particle) neighbors.set(id, [...(neighbors.get(id) ?? []), particle]);
+      }
+      for (const link of links) {
+        remember(link.from, link.to);
+        remember(link.to, link.from);
+      }
+      const hadParticles = particles.size > 0;
+      particles = new Map(nodes.map(node => {
+        const group = groupOf.get(node.id)!;
+        const anchor = anchors.get(group)!;
+        const previous = particles.get(node.id);
+        const nearby = neighbors.get(node.id);
+        const angle = hash(node.id) / 0x100000000 * 2 * Math.PI;
+        const base = nearby?.length ? {
+          x: nearby.reduce((sum, item) => sum + item.x, 0) / nearby.length,
+          y: nearby.reduce((sum, item) => sum + item.y, 0) / nearby.length,
+        } : anchor;
+        const radius = node.major ? 27 : node.kind === 'service' ? 23 : 16;
+        const labels = wrap(node.label);
+        const labelWidth = Math.max(0, ...labels.map(label => label.length * 3.4));
+        const collision = Math.max(radius + 10, labelWidth + 7, radius + 7 + labels.length * 12);
+        return [node.id, {
+          ...previous, id: node.id, radius, labels, collision, group, anchor, color: palette[hash(group) % palette.length],
+          x: previous?.x ?? base.x + Math.cos(angle) * 48, y: previous?.y ?? base.y + Math.sin(angle) * 48,
+        }];
+      }));
+      if (grab && !particles.has(grab.id)) {
+        grab = undefined;
+        simulation.alphaTarget(0);
+      }
+      const springs: Spring[] = [];
+      for (const link of links) {
+        const source = particles.get(link.from);
+        const target = particles.get(link.to);
+        if (source && target && source !== target) springs.push({ source, target });
+      }
+      spring.links([]);
+      simulation.nodes([...particles.values()]);
+      spring.links(springs);
+      if (particles.size) heat(hadParticles ? .34 : .85);
+      else { simulation.stop(); publish(); }
+    },
+    drag(id: string, point: Point) {
+      const node = particles.get(id);
+      if (!node) return;
+      if (!grab) {
+        grab = { id, point: { x: node.x, y: node.y } };
+        if (!reducedMotion) simulation.alphaTarget(.13).alpha(Math.max(.24, simulation.alpha())).restart();
+      }
+      node.x = node.fx = point.x;
+      node.y = node.fy = point.y;
+      publish();
+    },
+    release() {
+      if (!grab) return;
+      const node = particles.get(grab.id);
+      if (node) {
+        node.fx = node.fy = null;
+        node.vx = Math.max(-7, Math.min(7, (grab.point.x - node.x) * .08));
+        node.vy = Math.max(-7, Math.min(7, (grab.point.y - node.y) * .08));
+      }
+      grab = undefined;
+      simulation.alphaTarget(0);
+      heat(.27);
+    },
+    stop() { simulation.stop(); },
+  };
 }

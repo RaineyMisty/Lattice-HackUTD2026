@@ -24,7 +24,7 @@ button:disabled { cursor: default; }
   width: 100%;
   height: 100dvh;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-rows: auto minmax(0, 1fr);
   gap: clamp(9px, 1.6vh, 16px);
   padding: clamp(10px, 1.7vh, 21px) clamp(12px, 2vw, 34px);
 }
@@ -234,22 +234,30 @@ button:disabled { cursor: default; }
   75% { transform: translateX(1px); }
   100% { transform: none; }
 }
-.responses { min-width: 0; }
-.response-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.responses {
+  position: absolute;
+  z-index: 2;
+  left: 50%;
+  bottom: 9px;
+  max-width: calc(100% - 20px);
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+.response-grid { display: flex; justify-content: center; gap: 6px; }
 .task {
   --task-color: var(--downstream);
   min-width: 0;
   border: 1px solid #6a658e;
   border-left: 2px solid var(--task-color);
   border-radius: 8px;
-  padding: 10px 12px;
+  padding: 5px 9px;
   background: linear-gradient(120deg, #3b385f, #2d3457);
 }
 .task.P0 { --task-color: var(--direct); }
 .task-top { display: flex; gap: 7px; align-items: center; color: #e9e1fa; font-size: .77rem; }
 .task-top span:nth-child(2) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .priority { border-radius: 4px; padding: 2px 5px; color: var(--task-color); background: color-mix(in srgb, var(--task-color) 19%, #42395d); font: 700 .68rem var(--mono); }
-.task h3 { margin: 5px 0 0; color: #fbf4ff; font-size: .94rem; line-height: 1.12; }
+.task h3 { color: #fbf4ff; font-size: .76rem; line-height: 1.12; white-space: nowrap; }
 
 @media (max-width: 759px) {
   .console { padding: 8px; gap: 7px; }

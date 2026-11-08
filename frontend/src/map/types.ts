@@ -7,6 +7,8 @@ export interface MapNode {
   region: string;
   kind: NodeKind;
   major?: boolean;
+  detail?: boolean;
+  sourcePath?: string;
 }
 
 export interface MapLink {
@@ -18,7 +20,6 @@ export interface MapLink {
 export interface MapGraph {
   nodes: readonly MapNode[];
   links: readonly MapLink[];
-  homeRegion: string;
 }
 
 export interface NodeAppearance {
@@ -26,15 +27,16 @@ export interface NodeAppearance {
   caption?: string;
   muted?: boolean;
   pulse?: boolean;
+  delayMs?: number;
 }
 
 export interface LinkAppearance {
   tone?: MapTone;
   emphasized?: boolean;
+  delayMs?: number;
 }
 
 export interface MapPresentation {
   nodes?: Readonly<Record<string, NodeAppearance>>;
   links?: Readonly<Record<string, LinkAppearance>>;
-  focusNodeId?: string;
 }

@@ -133,17 +133,16 @@ export default function App() {
       <section className="arena" aria-label="System state and agent activity">
         <div className="arena-corner nw" /><div className="arena-corner ne" />
         <div className="arena-corner sw" /><div className="arena-corner se" />
-        <SystemMap graph={graph} presentation={presentation} defaultView={demoLabel ? 'overview' : 'focus'} selectedNodeId={selected} onSelectNode={id => void selectNode(id)} />
+        <SystemMap graph={graph} presentation={presentation} placingBug={placing} selectedNodeId={selected} onSelectNode={id => void selectNode(id)} />
 
         {agents.map((config, index) => <AgentCard key={config.id} config={config} activity={snapshot?.messages[index]} />)}
+        {impact.origins > 0 && <section className="responses" aria-label="Simulation impact">
+          <div className="response-grid">
+            <article className="task P0"><h3>{impact.origins} fault {impact.origins === 1 ? 'origin' : 'origins'}</h3></article>
+            <article className="task"><h3>{impact.potential} potentially affected</h3></article>
+          </div>
+        </section>}
       </section>
-
-      {impact.origins > 0 && <section className="responses" aria-label="Simulation impact">
-        <div className="response-grid">
-          <article className="task P0"><h3>{impact.origins} fault {impact.origins === 1 ? 'origin' : 'origins'}</h3></article>
-          <article className="task"><h3>{impact.potential} potentially affected</h3></article>
-        </div>
-      </section>}
     </main>
   );
 }
