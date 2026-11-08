@@ -8,7 +8,8 @@ const excluded = new Set(['.git', 'node_modules', 'vendor', 'dist', 'build', 'co
 const extensions = new Set([
   '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.py', '.go', '.rs', '.java', '.kt', '.cs',
   '.c', '.cpp', '.h', '.rb', '.php', '.swift', '.vue', '.svelte', '.proto', '.sql', '.sh',
-  '.json', '.yaml', '.yml', '.toml', '.xml', '.tf', '.md', '.gradle', '.sln',
+  '.json', '.yaml', '.yml', '.toml', '.xml', '.tf', '.md', '.gradle', '.sln', '.csproj',
+  '.properties', '.conf', '.ini', '.txt', '.mod', '.graphql', '.hpp', '.ex', '.exs', '.dart', '.html',
 ]);
 const maxSourceBytes = 512 * 1024;
 const excludedName = (name: string) => excluded.has(name.toLowerCase()) || /^\.env(?:\.|$)/i.test(name)
@@ -43,12 +44,35 @@ export async function repositoryHead(root: string) {
   return commit;
 }
 
+export async function revisionPaths(root: string, commit: string, signal?: AbortSignal) {
+  return (await git(root, ['ls-tree', '-r', '--name-only', '-z', commit], undefined, signal)).toString('utf8').split('\0').filter(Boolean);
+}
+
 export async function repositoryRevision(root: string) {
   const commit = await repositoryHead(root);
   const changes = await git(root, ['status', '--porcelain', '--untracked-files=no']);
   if (changes.length) throw new Error('The tracked working tree must match the Git commit before exploring');
-  const tracked = (await git(root, ['ls-tree', '-r', '--name-only', '-z', commit])).toString('utf8').split('\0');
-  return { commit, tracked: new Set(tracked) };
+  return { commit, tracked: new Set(await revisionPaths(root, commit)) };
+}
+
+export async function searchSource(root: string, commit: string | undefined, query: string, prefix: string, signal: AbortSignal) {
+  const args = ['grep', '-n', '-z', '-I', '-F', '-m', '2', '--no-color'];
+  if (!commit) args.push('--no-index');
+  args.push('-e', query);
+  if (commit) args.push(commit);
+  args.push('--');
+  if (prefix) args.push(':(literal)' + prefix);
+  const output = await git(root, args, 1024 * 1024, signal).catch((error: { code?: number }) => {
+    signal.throwIfAborted();
+    if (error.code === 1) return Buffer.alloc(0);
+    throw new Error('Source search failed. Try a narrower search or prefix.');
+  });
+  return output.toString('utf8').split('\n').flatMap(row => {
+    const [rawPath, line, text] = row.split('\0', 3);
+    const path = commit ? rawPath.slice(commit.length + 1) : rawPath;
+    return isAllowedSourcePath(path) && line && text !== undefined
+      ? [{ path, line: Number(line), text: text.slice(0, 320) }] : [];
+  }).slice(0, 32);
 }
 
 export async function readRevisionSource(root: string, commit: string, path: string, signal?: AbortSignal) {
@@ -57,6 +81,16 @@ export async function readRevisionSource(root: string, commit: string, path: str
   const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes).replaceAll('\r\n', '\n');
   if (text !== source.text) throw new Error(`Working file differs from the selected Git commit: ${source.path}`);
   return source;
+}
+
+export function isAllowedSourcePath(path: string) {
+  return path.length > 0 && path.length <= 768 && !/[:\\\x00-\x1f]/.test(path)
+    && path.split('/').every(part => part && part !== '.' && part !== '..' && !excludedName(part));
+}
+
+export function isSourcePath(path: string) {
+  return isAllowedSourcePath(path)
+    && (extensions.has(extname(path).toLowerCase()) || /^(dockerfile|containerfile|makefile|gemfile|rakefile)(\.|$)/i.test(basename(path)));
 }
 
 export async function indexSources(root: string, limit = 4096) {
@@ -70,7 +104,7 @@ export async function indexSources(root: string, limit = 4096) {
       if (excludedName(entry.name) || entry.isSymbolicLink()) continue;
       const path = slash(join(dir, entry.name));
       if (entry.isDirectory() && dirs.length < limit) dirs.push(path);
-      if (entry.isFile() && (extensions.has(extname(entry.name).toLowerCase()) || /^(dockerfile|makefile)(\.|$)/i.test(basename(entry.name)))) files.push(path);
+      if (entry.isFile() && isSourcePath(path)) files.push(path);
       if (files.length >= limit) break;
     }
   }
@@ -79,14 +113,10 @@ export async function indexSources(root: string, limit = 4096) {
 
 export async function readRepositorySource(root: string, path: string) {
   const normalized = slash(path);
-  if (!normalized || normalized.startsWith('/') || normalized.includes(':') || normalized.includes('\0')
-    || normalized.split('/').some(part => !part || part === '.' || part === '..' || excludedName(part))) {
-    throw new Error('Expected an allowed repository-relative file path');
-  }
+  if (!isAllowedSourcePath(normalized)) throw new Error('Expected an allowed repository-relative file path');
   const absolute = await realpath(resolve(root, normalized));
   const canonical = slash(relative(root, absolute));
-  if (!canonical || canonical === '..' || canonical.startsWith('../') || isAbsolute(canonical)
-    || canonical.split('/').some(excludedName)) {
+  if (isAbsolute(canonical) || !isAllowedSourcePath(canonical)) {
     throw new Error('The file resolves outside the allowed repository sources');
   }
   if (!(await stat(absolute)).isFile()) throw new Error('Expected a file; this path is a directory or special entry');
@@ -102,4 +132,8 @@ export async function readRepositorySource(root: string, path: string) {
   } finally {
     await file.close();
   }
+}
+
+export function numberedSourceExcerpt(text: string) {
+  return text.split('\n', 120).map((line, index) => (index + 1) + ': ' + line.slice(0, 180)).join('\n').slice(0, 12_000);
 }

@@ -113,6 +113,8 @@ export interface ExplorationDatabase {
   readContext(runId: string, limit?: number, signal?: AbortSignal, scope?: AgentScope): Promise<ExplorationContext>;
   /** Claim atomically and report the currently observed in-flight work. */
   claimTask(scope: AgentScope, preferredId?: string, signal?: AbortSignal, leaseMs?: number): Promise<TaskClaim>;
+  enqueueTasks?(runId: string, tasks: readonly ExplorationTask[]): Promise<boolean>;
+  publishDiscovery?(scope: AgentScope, taskId: string, update: WorldUpdate, signal?: AbortSignal): Promise<void>;
   /** Save all findings and complete the claim atomically. A retry must not duplicate records. */
   commitDiscovery(scope: AgentScope, taskId: string, batch: DiscoveryBatch, signal?: AbortSignal): Promise<void>;
   settleTask(scope: AgentScope, taskId: string, outcome: 'release' | 'failed'): Promise<void>;

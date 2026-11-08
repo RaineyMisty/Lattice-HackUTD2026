@@ -4,6 +4,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { resolveCodexExecutable } from './codex-executable.js';
+import { NvidiaHarness } from './nvidia.ts';
+import type { SourceRange } from './worldProtocol.ts';
+export { NVIDIA_NEMOTRON_MODEL } from './nvidia.ts';
 
 export interface HarnessSessionOptions {
   repositoryPath: string;
@@ -15,6 +18,9 @@ export interface HarnessSessionOptions {
 
 export interface HarnessTurn {
   prompt: string;
+  commit?: string;
+  source?: SourceRange;
+  publishDiscovery?(response: string, observed: readonly SourceRange[]): Promise<{ facts: number; tasks: number; rejected: number }>;
   outputSchema: object;
   signal: AbortSignal;
   onActivity(message: string): Promise<void>;
@@ -30,7 +36,6 @@ export interface CodingHarness {
 }
 
 export type CodexProvider = 'openai' | 'nvidia';
-export const NVIDIA_NEMOTRON_MODEL = 'nvidia/nemotron-3.5-super-vl-120b-a12b';
 
 export interface CodexHarnessOptions {
   provider?: CodexProvider;
@@ -40,45 +45,17 @@ export interface CodexHarnessOptions {
 }
 
 interface CodexLaunch {
-  config: string[];
   env: NodeJS.ProcessEnv;
   model?: string;
   apiKey?: string;
 }
 
-function configureProvider(options: CodexHarnessOptions): CodexLaunch {
+function configureCodex(options: CodexHarnessOptions): CodexLaunch {
   const env: NodeJS.ProcessEnv = { ...process.env };
   delete env.LATTICE_STDB_TOKEN;
-  if (options.provider !== 'nvidia') {
-    if (options.apiKey) env.CODEX_API_KEY = options.apiKey;
-    return {
-      config: [], model: options.model, apiKey: options.apiKey,
-      env,
-    };
-  }
-  const apiKey = (options.apiKey ?? process.env.NVIDIA_API_KEY)?.trim();
-  if (!apiKey) throw new Error('NVIDIA_API_KEY is required when using --provider nvidia');
-
-  env.NVIDIA_API_KEY = apiKey;
-  delete env.CODEX_API_KEY;
-  delete env.OPENAI_API_KEY;
-  delete env.OPENAI_BASE_URL;
-  return {
-    model: options.model ?? NVIDIA_NEMOTRON_MODEL,
-    apiKey,
-    env,
-    config: [
-      'model_provider="nvidia"',
-      'model_providers.nvidia.name="NVIDIA Build"',
-      'model_providers.nvidia.base_url="https://integrate.api.nvidia.com/v1"',
-      'model_providers.nvidia.wire_api="responses"',
-      'model_providers.nvidia.env_key="NVIDIA_API_KEY"',
-      'model_providers.nvidia.requires_openai_auth=false',
-      'model_providers.nvidia.supports_websockets=false',
-      'model_reasoning_effort="low"',
-      'shell_environment_policy.exclude=["NVIDIA_API_KEY"]',
-    ],
-  };
+  delete env.NVIDIA_API_KEY;
+  if (options.apiKey) env.CODEX_API_KEY = options.apiKey;
+  return { env, model: options.model, apiKey: options.apiKey };
 }
 
 interface CodexEvent {
@@ -91,15 +68,17 @@ interface CodexEvent {
 }
 
 export class CodexHarness implements CodingHarness {
-  private readonly launch: CodexLaunch;
+  private readonly nvidia?: NvidiaHarness;
 
   constructor(private readonly options: CodexHarnessOptions = {}) {
-    this.launch = configureProvider(options);
+    if (options.provider === 'nvidia') this.nvidia = new NvidiaHarness(options);
   }
 
-  openSession({ repositoryPath }: HarnessSessionOptions): HarnessSession {
+  openSession(options: HarnessSessionOptions): HarnessSession {
+    if (this.nvidia) return this.nvidia.openSession(options);
+    const { repositoryPath } = options;
     const executable = resolveCodexExecutable(this.options.codexPath);
-    const launch = this.launch;
+    const launch = configureCodex(this.options);
     let threadId: string | undefined;
     return {
       async run(turn) {
@@ -113,7 +92,6 @@ export class CodexHarness implements CodingHarness {
           const args = [
             '--ask-for-approval', 'never', '-c', 'web_search="disabled"',
             '-c', 'sandbox_workspace_write.network_access=false',
-            ...launch.config.flatMap(config => ['-c', config]),
             'exec', '--sandbox', 'read-only', '--cd', repositoryPath,
             ...(threadId ? ['resume', ...common, threadId, '-'] : [...common, '-']),
           ];

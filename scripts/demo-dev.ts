@@ -8,7 +8,6 @@ import { fileURLToPath } from 'node:url';
 import { createServer, type ViteDevServer } from 'vite';
 import { AgentManager, CodexHarness, printAgentActivity, SpacetimeExplorationDatabase, type CodingHarness, type ExplorationHandle } from '../agents/src/index.ts';
 import { repositoryHead, repositoryRevision, repositoryRoot } from '../agents/src/explorer/repository.ts';
-import { serviceEntryPaths } from '../agents/src/explorer/entrypoint.ts';
 import { tables, type DbConnection, type Simulation } from '../spacetime_db/client/index.ts';
 import { connectDatabase, publisherToken, spacetimeCli } from './local-world.ts';
 
@@ -31,7 +30,6 @@ interface DemoRepository {
   name: string;
   commit: string;
   role?: 'reader' | 'operator';
-  serviceEntries?: ReadonlyMap<string, string>;
   simulationId?: string;
   run?: ExplorationHandle;
 }
@@ -82,8 +80,7 @@ export async function startDemo(options: DemoOptions = {}) {
   if (configuredWebPort === undefined) {
     while (webPort < 5183 && (webPort === dbPort || await listening(webPort))) webPort++;
   }
-  const turns = options.turns ?? Number(process.env.LATTICE_DEMO_TURNS ?? 16);
-  if (!Number.isInteger(turns) || turns < 1 || turns > 32) throw new Error('LATTICE_DEMO_TURNS must be between 1 and 32');
+  const turns = options.turns;
   if (dbPort === webPort || await listening(dbPort) || await listening(webPort)) {
     throw new Error(`Demo ports ${webPort} (web) and ${dbPort} (database) must be free`);
   }
@@ -177,8 +174,6 @@ export async function startDemo(options: DemoOptions = {}) {
         const ready = revision?.commit === repository.commit;
         const role = ready ? 'operator' : 'reader';
         if (role === repository.role) continue;
-        const serviceEntries = ready ? serviceEntryPaths(revision.tracked) : undefined;
-        repository.serviceEntries = serviceEntries?.size ? serviceEntries : undefined;
         await client.reducers.setMember({ worldId: repository.worldId, identity, role });
         repository.role = role;
         log(`Repository ${repository.name} ${ready ? 'ready' : 'listed; waiting for a clean checkout'} (${repository.commit.slice(0, 7)})`);
@@ -201,10 +196,10 @@ export async function startDemo(options: DemoOptions = {}) {
           database: new SpacetimeExplorationDatabase({ ...config, token, worldId: repository.worldId }), harness, onActivity: printAgentActivity,
         });
         const handle = await manager.start({
-          repositoryPath: repository.path, agentCount: 4, maxTurnsPerAgent: turns, serviceEntries: repository.serviceEntries,
+          repositoryPath: repository.path, agentCount: 4, maxTurnsPerAgent: turns,
         });
         repository.run = handle;
-        log(`${repository.name} exploration started with four Agents (${turns} turns maximum per Agent)`);
+        log(`${repository.name} exploration started with four Agents (${turns === undefined ? 'continuous Frontier' : turns + ' turns maximum per Agent'})`);
         void handle.done.then(async result => {
           const { world } = await manager.getContext(handle.id);
           const queued = world?.frontier.filter(task => task.status === 'queued').length ?? 0;
@@ -216,6 +211,7 @@ export async function startDemo(options: DemoOptions = {}) {
     client.db.worldSimulations.onUpdate((_context, _before, row) => {
       const repository = repositories.get(row.worldId);
       if (repository && row.id === repository.simulationId && row.status === 'stopped') {
+        repository.simulationId = undefined;
         log(`Reset committed for ${repository.name}; stopping active Explorers`);
         pending = pending.then(async () => { await repository.run?.stop(); }).catch(error => log(`Could not stop exploration — ${String(error)}`));
       }

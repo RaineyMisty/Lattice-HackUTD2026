@@ -4,7 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
-import { AgentManager } from './index.ts';
+import { AgentManager, CodexHarness } from './index.ts';
+import { seedFrontier } from './explorer/frontier.ts';
 import type { CodingHarness, HarnessSessionOptions, HarnessTurn } from './index.ts';
 
 const names = ['a.ts', 'b.ts', 'c.ts', 'd.ts'];
@@ -111,5 +112,47 @@ test('invalid harness output fails its claim and reports a terminal status', asy
     assert.equal(context.tasks[0].state, 'failed');
     assert.ok(context.agents[0].error);
     assert.deepEqual(context.evidence, []);
+  });
+});
+
+test('Frontier accepts seed order and skips unreadable or excluded files', async () => {
+  await withRepository(async root => {
+    const fixture = ['routes.yml', 'OrdersClient.py', 'main.go', 'Pipfile', 'oversize.ts', '.env'];
+    try {
+      await Promise.all(fixture.map(path => writeFile(join(root, path), path === 'oversize.ts' ? Buffer.alloc(512 * 1024 + 1, 65) : 'test source\n')));
+      const tasks = await seedFrontier(root, ['oversize.ts', 'c.ts', '.env', 'main.go', 'Pipfile', 'OrdersClient.py', 'routes.yml'], 4);
+      assert.deepEqual(tasks.map(task => task.path), ['c.ts', 'main.go', 'Pipfile', 'OrdersClient.py']);
+    } finally {
+      await Promise.all(fixture.map(path => unlink(join(root, path)).catch(() => undefined)));
+    }
+  });
+});
+
+test('NVIDIA requires a real source read before requesting structured discovery', async t => {
+  await withRepository(async repositoryPath => {
+    const phases: string[] = [];
+    const discovery = '{"nodes":[],"edges":[],"tasks":[]}';
+    t.mock.method(globalThis, 'fetch', async (_input: unknown, options: RequestInit) => {
+      const body = JSON.parse(String(options.body));
+      phases.push(body.tool_choice ?? body.response_format.type);
+      let message: { role: string; content: string | null; tool_calls?: unknown[] } = { role: 'assistant', content: 'READY' };
+      if (phases.length === 2) {
+        message = {
+          role: 'assistant', content: null, tool_calls: [{
+            id: 'read-source', type: 'function', function: { name: 'read_lines', arguments: '{"path":"a.ts"}' },
+          }],
+        };
+      } else if (phases.length > 2) {
+        const result = body.messages.find((row: { role: string }) => row.role === 'tool');
+        assert.equal(JSON.parse(result.content).lines[0].text, files['a.ts']);
+        if (body.response_format) message.content = discovery;
+      }
+      return Response.json({ choices: [{ message }] });
+    });
+    const harness = new CodexHarness({ provider: 'nvidia', apiKey: 'test-key' });
+    const session = harness.openSession({ repositoryPath, agentId: 'agent-1', sessionId: 'test-session', seed: 1, startPath: 'a.ts' });
+    assert.equal(await session.run({ prompt: 'Explore a.ts', outputSchema: { type: 'object' },
+      signal: AbortSignal.timeout(1000), async onActivity() {} }), discovery);
+    assert.deepEqual(phases, ['required', 'required', 'auto', 'json_schema']);
   });
 });

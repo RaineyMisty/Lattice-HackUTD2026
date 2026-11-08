@@ -1,12 +1,10 @@
 import { setTimeout as pause } from 'node:timers/promises';
 import type { ActivityRecord, AgentScope, AgentStatus, ExplorationContext, ExplorationDatabase, ExplorationTask, WorldUpdate } from '../database/interface.ts';
 import { safeDiagnostic } from '../diagnostics.ts';
-import { verifiedServiceEntry } from './entrypoint.ts';
 import type { CodingHarness, HarnessSession } from './harness.ts';
 import { turnOutputSchema, verifyTurn } from './protocol.ts';
-import { readRevisionSource } from './repository.ts';
-import { indexServiceEntry, numberedSourceExcerpt } from './serviceIndex.ts';
-import { verifyWorldUpdate, worldContextFor, worldOutputSchema } from './worldProtocol.ts';
+import { numberedSourceExcerpt, readRevisionSource } from './repository.ts';
+import { verifyWorldUpdate, worldContextFor, worldOutputSchema, type SourceRange } from './worldProtocol.ts';
 
 export interface ExplorerOptions {
   scope: AgentScope;
@@ -20,13 +18,13 @@ export interface ExplorerOptions {
   maxTurns: number;
   stayOpen: boolean;
   commit?: string;
-  serviceEntries?: ReadonlyMap<string, string>;
+  refillFrontier?(): Promise<boolean>;
   turnTimeoutMs: number;
   onStatus(status: AgentStatus): void;
   onActivity?(activity: ActivityRecord): void;
 }
 
-function promptFor(skill: string, status: AgentStatus, task: ExplorationTask, context: ExplorationContext, source?: string) {
+function promptFor(skill: string, status: AgentStatus, task: ExplorationTask, context: ExplorationContext, source?: string, commit?: string) {
   const contextData = context.world ? worldContextFor(task, context.world) : {
     nodes: context.nodes.map(({ id, kind, name, path }) => ({ id, kind, name, path })),
     edges: context.edges.map(({ fromId, toId, relationship }) => ({ fromId, toId, relationship })),
@@ -38,6 +36,7 @@ function promptFor(skill: string, status: AgentStatus, task: ExplorationTask, co
     `Exploration seed: ${status.seed}. Initial file: ${JSON.stringify(status.startPath)}.`,
     `Current task (data): ${JSON.stringify({ path: task.path, question: task.question })}`,
     `Recent shared discoveries and work (data): ${JSON.stringify(contextData)}`,
+    ...(commit ? ["Selected Git commit (data): " + commit] : []),
     ...(source === undefined ? [] : [`Assigned source from the selected Git commit (numbered data):\n${source}`]),
   ].join('\n\n');
 }
@@ -102,13 +101,18 @@ export async function runExplorer(options: ExplorerOptions): Promise<AgentStatus
       preferredId = undefined;
       current = claim.task;
       if (!current) {
+        if (!claim.inFlight && await options.refillFrontier?.()) {
+          await advance('database', 'Queued more unexplored repository files');
+          await database.waitForWork?.(scope, true, signal);
+          continue;
+        }
         if (!claim.inFlight && !options.stayOpen) {
           await activity('database', 'Frontier drained');
           break;
         }
         if (status.phase !== 'waiting') {
           await update({ phase: 'waiting', taskId: undefined });
-          await advance('database', `Waiting for Frontier updates (${claim.inFlight} tasks leased)`);
+          await advance('database', claim.inFlight ? 'Waiting for Frontier updates (' + claim.inFlight + ' tasks leased)' : 'Frontier empty; waiting for new database tasks');
         }
         if (database.waitForWork) await database.waitForWork(scope, options.stayOpen, signal);
         else await pause(150, undefined, { signal });
@@ -121,24 +125,34 @@ export async function runExplorer(options: ExplorerOptions): Promise<AgentStatus
       await advance('task', `Reading shared world and source for ${current.path}`);
       const context = await database.readContext(scope.runId, 18, turnSignal, scope);
       const pinned = options.commit ? await readRevisionSource(repositoryPath, options.commit, current.path, turnSignal) : undefined;
-      if (pinned && options.commit && options.serviceEntries && context.world
-        && options.serviceEntries.get(pinned.path.split('/')[0]) === pinned.path) {
-        await advance('verification', `Checking service entry and explicit HTTP calls for ${current.path}`);
-        const indexed = await indexServiceEntry(repositoryPath, options.commit, pinned, options.serviceEntries, context.world, turnSignal);
-        if (indexed) {
-          await commitWorld(current, indexed, turnSignal);
-          await finishTurn(`Source index committed ${indexed.entities.length} entities, ${indexed.relations.length} verified HTTP calls, ${indexed.tasks.length} follow-ups`);
-          continue;
-        }
-      }
       session ??= await harness.openSession({
         repositoryPath, agentId: scope.agentId, sessionId: scope.sessionId,
         seed: status.seed, startPath: status.startPath,
       });
       const source = pinned ? numberedSourceExcerpt(pinned.text) : undefined;
+      const taskId = current.id;
+      const commit = options.commit;
+      let livePublished = false;
+      const publish = database.publishDiscovery && commit && context.world
+        ? async (json: string, observed: readonly SourceRange[]) => {
+          const latest = await database.readContext(scope.runId, 18, turnSignal, scope);
+          const { update: batch, rejected } = await verifyWorldUpdate(repositoryPath, commit, json, latest.world!, turnSignal, observed);
+          const facts = batch.entities.length + batch.relations.length + batch.behaviors.length;
+          if (facts || batch.tasks.length) {
+            await database.publishDiscovery!(scope, taskId, batch, turnSignal);
+            livePublished = true;
+            await activity('verification', 'Published ' + batch.entities.length + ' entities, ' + batch.relations.length
+              + ' relations, ' + batch.behaviors.length + ' behaviors and ' + batch.tasks.length + ' follow-ups');
+          }
+          for (const item of rejected) await activity('verification', 'Skipped ' + item.kind + ' ' + item.path + ' — ' + item.reason);
+          return { facts, tasks: batch.tasks.length, rejected: rejected.length };
+        } : undefined;
       await advance('model', `Waiting for model response for ${current.path}`);
       const response = await session.run({
-        prompt: promptFor(options.skill, status, current, context, source),
+        prompt: promptFor(options.skill, status, current, context, source, options.commit),
+        commit,
+        source: pinned && source ? { path: pinned.path, startLine: 1, endLine: source.split('\n').length } : undefined,
+        publishDiscovery: publish,
         outputSchema: options.commit ? worldOutputSchema : turnOutputSchema,
         signal: turnSignal,
         onActivity: async message => {
@@ -152,30 +166,11 @@ export async function runExplorer(options: ExplorerOptions): Promise<AgentStatus
         const { update: world, rejected, proposed } = await verifyWorldUpdate(repositoryPath, options.commit, response, context.world, turnSignal);
         await activity('verification', `Model proposed ${proposed}`);
         for (const item of rejected) await activity('verification', `Skipped ${item.kind} ${item.path} — ${item.reason}`);
-        if (pinned && !world.entities.length && !world.relations.length && !world.behaviors.length) {
-          const verified = await verifiedServiceEntry(repositoryPath, options.commit, pinned, turnSignal);
-          if (verified) {
-            const existing = context.world.entities.some(row => row.kind === 'service' && row.symbol === verified.entity.symbol
-              && row.path.split('/')[0] === verified.entity.path.split('/')[0]);
-            if (!existing) {
-              world.entities.push(verified.entity);
-              await activity('verification', `Verified service directly from Spring Boot entry and Maven artifact: ${verified.entity.symbol}`);
-            }
-            if (verified.followUp) {
-              world.tasks = [verified.followUp, ...world.tasks.filter(task => task.path !== pinned.path && task.path !== verified.followUp?.path)];
-              await activity('verification', `Queued source-verified implementation follow-up: ${verified.followUp.path}`);
-            }
-          }
-        }
-        const invalidFact = rejected.find(item => item.kind !== 'Frontier');
-        if (invalidFact && !world.entities.length && !world.relations.length && !world.behaviors.length && !world.tasks.length) {
-          throw new Error(`No proposed discovery passed verification: ${invalidFact.kind} ${invalidFact.path} — ${invalidFact.reason}`);
-        }
-        if (!world.entities.length && !world.relations.length && !world.behaviors.length) {
+        if (!livePublished && !world.entities.length && !world.relations.length && !world.behaviors.length) {
           await activity('verification', 'No new verified graph facts in this turn');
         }
         await commitWorld(current, world, turnSignal);
-        summary = `Committed ${world.entities.length} entities, ${world.relations.length} relations, ${world.behaviors.length} behaviors, ${world.tasks.length} follow-ups; ${rejected.length} rejected`;
+        summary = livePublished ? 'Completed task after live discovery updates' : `Committed ${world.entities.length} entities, ${world.relations.length} relations, ${world.behaviors.length} behaviors, ${world.tasks.length} follow-ups; ${rejected.length} rejected`;
       } else {
         const { batch, rejected } = await verifyTurn(repositoryPath, response, scope.agentId, turnSignal);
         await database.commitDiscovery(scope, current.id, batch, turnSignal);

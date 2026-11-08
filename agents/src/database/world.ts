@@ -2,7 +2,7 @@ import { basename } from 'node:path';
 import { worldConnection, worldQueries, type DbConnection, type WorldConnectionConfig } from '../../../spacetime_db/client/index.ts';
 import type {
   ActivityRecord, AgentScope, AgentStatus, DiscoveryBatch, ExplorationContext, ExplorationDatabase,
-  ExplorationTask, RunIdentity, TaskClaim, WorldKnowledge,
+  ExplorationTask, RunIdentity, TaskClaim, WorldKnowledge, WorldUpdate,
 } from './interface.ts';
 
 export interface SpacetimeExplorationOptions extends WorldConnectionConfig {
@@ -119,10 +119,12 @@ export class SpacetimeExplorationDatabase implements ExplorationDatabase {
         throw new Error('Use the world owner for parallel workers, or an Agent identity with --agents 1');
       }
       for (const task of tasks) state.preferred.set(task.id, JSON.stringify([worldId, task.path, task.question]));
-      if (client.db.worldFrontier.count() === 0n) {
+      const frontier = new Map([...client.db.worldFrontier.iter()].map(task => [task.id, task.status]));
+      const newSeeds = tasks.filter(task => !frontier.has(state.preferred.get(task.id)!));
+      if (newSeeds.length && ![...frontier.values()].some(status => status === 'queued' || status === 'leased')) {
         await client.reducers.submitDiscovery({
           worldId, entities: [], relations: [], behaviors: [],
-          tasks: tasks.map(({ path, question }) => ({ path, question })), completes: undefined,
+          tasks: newSeeds.map(({ path, question }) => ({ path, question })), completes: undefined,
         });
       }
       // Each Explorer uses its own subscribed cache and claim identity.
@@ -163,7 +165,7 @@ export class SpacetimeExplorationDatabase implements ExplorationDatabase {
     const initialIds = new Set(initial.values());
     const queued = [...client.db.worldFrontier.iter()].filter(row => row.status === 'queued');
     queued.sort((a, b) => Number(b.id === preferred) - Number(a.id === preferred)
-      || Number(initialIds.has(b.id)) - Number(initialIds.has(a.id)) || a.attempt - b.attempt);
+      || Number(initialIds.has(a.id)) - Number(initialIds.has(b.id)) || a.attempt - b.attempt);
     for (const task of queued) {
       signal?.throwIfAborted();
       try {
@@ -203,6 +205,24 @@ export class SpacetimeExplorationDatabase implements ExplorationDatabase {
       if (signal.aborted) stopped();
       else changed();
     });
+  }
+
+  async enqueueTasks(runId: string, tasks: readonly ExplorationTask[]) {
+    const { client } = this.run(runId).control;
+    const scheduled = new Set([...client.db.worldFrontier.iter()].map(row => row.path));
+    const pending = tasks.filter(task => !scheduled.has(task.path)).map(({ path, question }) => ({ path, question }));
+    if (!pending.length) return false;
+    await client.reducers.submitDiscovery({
+      worldId: this.options.worldId, entities: [], relations: [], behaviors: [], tasks: pending, completes: undefined,
+    });
+    return true;
+  }
+
+  async publishDiscovery(scope: AgentScope, taskId: string, update: WorldUpdate, signal?: AbortSignal) {
+    signal?.throwIfAborted();
+    const worker = this.worker(scope);
+    if (worker.claim?.taskId !== taskId) throw new Error('Expected an active exploration claim');
+    await worker.connection.client.reducers.submitDiscovery({ worldId: this.options.worldId, ...update, completes: undefined });
   }
 
   async commitDiscovery(scope: AgentScope, taskId: string, batch: DiscoveryBatch, signal?: AbortSignal) {

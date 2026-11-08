@@ -7,16 +7,18 @@ import { readRevisionSource } from './repository.ts';
 
 const path = z.string().min(1).max(768);
 const ref = z.strictObject({ kind: z.enum(entityKinds), path, symbol: z.string().trim().max(256) });
-const citation = z.strictObject({ path, startLine: z.number().int().min(1), endLine: z.number().int().min(1), excerpt: z.string().min(1).max(2400) });
+const sourceRange = z.strictObject({ path, startLine: z.number().int().min(1), endLine: z.number().int().min(1) });
+const citation = sourceRange.extend({ excerpt: z.string().min(1).max(2400) });
+export type SourceRange = z.infer<typeof sourceRange>;
 const event = z.string().regex(/^[a-z][a-z0-9_.-]{0,63}$/);
 const key = z.string().regex(/^[a-z][a-z0-9_.-]{0,63}$/);
 const value = z.string().max(2048);
 const delay = z.number().int().min(0).max(3_600_000);
-const schema = z.strictObject({
-  entities: z.array(z.strictObject({ entity: ref, source: citation })).max(24),
-  relations: z.array(z.strictObject({ from: ref, kind: z.enum(relationKinds), to: ref, source: citation })).max(32),
+const discoverySchema = (evidence: typeof sourceRange | typeof citation, size: number) => z.strictObject({
+  entities: z.array(z.strictObject({ entity: ref, source: evidence })).max(Math.min(size, 24)),
+  relations: z.array(z.strictObject({ from: ref, kind: z.enum(relationKinds), to: ref, source: evidence })).max(size),
   behaviors: z.array(z.strictObject({
-    entity: ref, name: z.string().trim().min(1).max(128), source: citation,
+    entity: ref, name: z.string().trim().min(1).max(128), source: evidence,
     rule: z.strictObject({
       event,
       when: z.array(z.strictObject({ key, equals: value })).max(12),
@@ -24,11 +26,14 @@ const schema = z.strictObject({
       emit: z.array(z.strictObject({ target: ref.nullable(), event, delayMs: delay })).max(12),
       retry: z.strictObject({ delayMs: delay.min(1), maxAttempts: z.number().int().min(2).max(8) }).nullable(),
     }),
-  })).max(16),
-  tasks: z.array(z.strictObject({ path, question: z.string().trim().min(1).max(400) })).max(8),
+  })).max(Math.min(size, 16)),
+  tasks: z.array(z.strictObject({ path, question: z.string().trim().min(1).max(400) })).max(Math.min(size, 8)),
 });
 
+const schema = discoverySchema(citation, 32);
+const liveSchema = discoverySchema(sourceRange, 4);
 export const worldOutputSchema = z.toJSONSchema(schema, { target: 'draft-7' });
+export const liveWorldOutputSchema = z.toJSONSchema(liveSchema, { target: 'draft-7' });
 
 function scalar(text: string) {
   const value: unknown = JSON.parse(text);
@@ -44,10 +49,10 @@ function userName(value: string) {
 }
 
 export async function verifyWorldUpdate(
-  root: string, commit: string, response: string, world: WorldKnowledge, signal: AbortSignal,
+  root: string, commit: string, response: string, world: WorldKnowledge, signal: AbortSignal, observed?: readonly SourceRange[],
 ) {
   signal.throwIfAborted();
-  const output = schema.parse(JSON.parse(response));
+  const output = (observed ? liveSchema : schema).parse(JSON.parse(response));
   const update: WorldUpdate = { entities: [], relations: [], behaviors: [], tasks: [] };
   const rejected: { kind: string; path: string; reason: string }[] = [];
   const sources = new Map<string, ReturnType<typeof readRevisionSource>>();
@@ -72,10 +77,14 @@ export async function verifyWorldUpdate(
     if (!active.has(node.key)) throw new Error(`Missing verified endpoint: ${node.path} ${node.symbol}`);
     return node.key;
   }
-  async function cite(input: z.infer<typeof citation>) {
+  async function cite(input: SourceRange & { excerpt?: string }) {
     const source = await read(input.path);
-    if (source.path.length > 768) throw new Error('Source path exceeds the database limit');
-    return { ...input, path: source.path, excerpt: matchQuote(source.text, input.startLine, input.endLine, input.excerpt) };
+    const { startLine, endLine } = input;
+    if (observed && !observed.some(range => range.path === source.path && range.startLine <= startLine && range.endLine >= endLine)) {
+      throw new Error('Read the cited lines before publishing a discovery');
+    }
+    const text = input.excerpt ?? source.text.split('\n').slice(startLine - 1, endLine).join('\n').trim().slice(0, 2400);
+    return { path: source.path, startLine, endLine, excerpt: matchQuote(source.text, startLine, endLine, text) };
   }
   async function check(kind: string, path: string, run: () => Promise<void>) {
     signal.throwIfAborted();
@@ -138,8 +147,10 @@ export function worldContextFor(task: ExplorationTask, world: WorldKnowledge) {
   const behaviors = world.behaviors.filter(row => keys.has(row.entity)).slice(0, 12);
   const subjects = new Set([...entities, ...relations, ...behaviors].map(row => row.id));
   const frontier = [...world.frontier.filter(row => row.path === task.path), ...world.frontier.filter(row => row.path !== task.path && row.status !== 'done')];
+  const serviceDirectory = world.entities.filter(row => row.active && row.kind === 'service').slice(0, 64)
+    .map(({ kind, path, symbol }) => ({ kind, path, symbol }));
   return {
-    entities, relations, behaviors,
+    entities, relations, behaviors, serviceDirectory,
     evidence: world.evidence.filter(row => subjects.has(row.subjectId)).slice(-16)
       .map(({ subjectId, verdict, source }) => ({ subjectId, verdict, path: source.path, startLine: source.startLine, endLine: source.endLine })),
     frontier: frontier.slice(0, 24).map(({ path, question, status }) => ({ path, question, status })),

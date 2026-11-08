@@ -4,7 +4,7 @@ Lattice displays a repository dependency world and simulates the impact of a fau
 
 ## Run the interactive train-ticket demo
 
-Use a clean Git checkout at `repo/train-ticket`, installed project dependencies, and a current Codex CLI. Install the module dependencies with `npm.cmd --prefix spacetime_db ci` if needed. Sign in to SpacetimeDB CLI once with `spacetime login`.
+Use a clean Git checkout at `repo/train-ticket`, installed project dependencies, and an NVIDIA API key. Install the module dependencies with `npm.cmd --prefix spacetime_db ci` if needed. Sign in to SpacetimeDB CLI once with `spacetime login`.
 
 From the project root in PowerShell:
 
@@ -17,9 +17,9 @@ The dev server starts its own local SpacetimeDB instance on port 3382 and opens 
 
 **Start** creates a simulation for the selected repository and starts its four Explorers. Verified findings grow the map and appear in the Agent speech bubbles. Use the bug icon to inject a fault, or pick up the wrench and click the red fault origin to remove its impact and cancel its pending events. Already executed behavior state stays in the simulation history. **Reset** stops the selected simulation and its active exploration, keeping discoveries in the database.
 
-The four Explorers share one implementation and choose distinct initial paths using their seeds. By default each Explorer can process 16 tasks. They verify the Git-tracked Spring Boot entries and explicit HTTP call sites first, then use the model for implementation follow-ups. Set `LATTICE_DEMO_TURNS` before launch to change the task budget per Explorer. The private browser link is saved at `.data/interactive-demo/browser-url.txt` if you need to reopen it. Ctrl+C closes the demo processes. Model requests use the NVIDIA key in the terminal.
+The four Explorers share one implementation and choose distinct initial paths using their seeds. Explorers keep claiming tasks until Reset or shutdown. When the Frontier drains, the runner schedules another batch of unexplored source files and waits once those files are exhausted. Each starts from one seeded Git-tracked file. The model uses read-only tools to inspect the repository, choose where to explore, and queue follow-up files. Discoveries are checked against the selected commit before submission. The private browser link is saved at `.data/interactive-demo/browser-url.txt` if you need to reopen it. Ctrl+C closes the demo processes. Model requests use the NVIDIA key in the terminal and call NVIDIA directly. Agents publish small batches during exploration, and the terminal reports each write as it happens.
 
-The terminal shows each Explorer's task, model progress, verified or skipped candidates, and database commits. A pending line every ten seconds identifies the current stage. A directory proposed as a follow-up is skipped. When a model returns no graph facts for a recognized Spring Boot entry, the Explorer can verify the service and an implementation follow-up from the pinned source and Maven manifest.
+The terminal shows each Explorer's task, model progress, verified or skipped candidates, and database commits. A pending line every ten seconds identifies the current stage. A directory proposed as a follow-up is skipped.
 
 ## Run against a local repository world
 
