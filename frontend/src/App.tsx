@@ -28,7 +28,7 @@ export default function App() {
   const simulationKey = snapshot ? simulationStorageKey(snapshot.world.id) : '';
   const simulation = snapshot?.simulations.find(row => row.id === sessionStorage.getItem(simulationKey) && row.status === 'running');
   const canControl = !!connection && !!snapshot?.canSimulate && !busy;
-  const hasService = snapshot?.entities.some(row => row.active && row.kind === 'service');
+  const hasActiveEntity = snapshot?.entities.some(row => row.active);
   const placing = !!pickup && !!simulation && !!connection;
   const repairing = placing && pickup?.tool === 'wrench';
   const graph = useMemo(() => buildRepositoryGraph(snapshot?.entities, snapshot?.relations), [snapshot?.entities, snapshot?.relations]);
@@ -69,8 +69,8 @@ export default function App() {
       setSelected(current => current === id ? null : id);
       return;
     }
-    const entity = snapshot?.entities.find(row => row.id === id && (repairing
-      ? impact.presentation.nodes?.[row.id]?.tone === 'warning' : row.active && row.kind === 'service'));
+    const entity = snapshot?.entities.find(row => row.id === id && row.active
+      && (!repairing || impact.presentation.nodes?.[row.id]?.tone === 'warning'));
     if (!entity || !canControl || !connection || !simulation) return;
     setPickup(null);
     setSelected(null);
@@ -129,7 +129,7 @@ export default function App() {
         </div>
         <div className="controls">
           <button type="button" className="bug-button" aria-label="Place bug" aria-pressed={placing && !repairing}
-            disabled={!canControl || !simulation || !hasService} title="Place bug" onClick={event => pickTool('bug', event)}>
+            disabled={!canControl || !simulation || !hasActiveEntity} title="Place bug" onClick={event => pickTool('bug', event)}>
             <Bug size={23} strokeWidth={1.75} aria-hidden="true" />
           </button>
           <button type="button" className="bug-button wrench-button" aria-label="Clear bug" aria-pressed={repairing}
